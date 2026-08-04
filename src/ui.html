@@ -1,0 +1,380 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Membership → Open Dental · patient matching</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f6f7f9;
+    --panel: #ffffff;
+    --border: #e2e5ea;
+    --text: #16191d;
+    --muted: #6b7280;
+    --accent: #1d4ed8;
+    --matched: #047857;
+    --matched-bg: #ecfdf5;
+    --ambiguous: #b45309;
+    --ambiguous-bg: #fffbeb;
+    --missing: #b91c1c;
+    --missing-bg: #fef2f2;
+    --radius: 10px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0e1116; --panel: #161a21; --border: #262c36; --text: #e6e9ee; --muted: #98a1b0;
+      --accent: #7aa2ff; --matched: #34d399; --matched-bg: #0d2b22; --ambiguous: #fbbf24;
+      --ambiguous-bg: #2c220c; --missing: #f87171; --missing-bg: #2c1315;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 0 1rem 4rem;
+    background: var(--bg); color: var(--text);
+    font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  .wrap { max-width: 1400px; margin: 0 auto; }
+  header { display: flex; flex-wrap: wrap; gap: .75rem 1.5rem; align-items: baseline; padding: 1.5rem 0 1rem; }
+  h1 { font-size: 1.15rem; margin: 0; letter-spacing: -.01em; }
+  .sub { color: var(--muted); font-size: .85rem; }
+  .spacer { flex: 1 1 auto; }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 1rem; }
+  button {
+    font: inherit; font-size: .85rem; padding: .4rem .75rem; border-radius: 7px;
+    border: 1px solid var(--border); background: var(--panel); color: var(--text); cursor: pointer;
+  }
+  button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.primary:hover { opacity: .9; color: #fff; }
+
+  #drop {
+    border: 1.5px dashed var(--border); border-radius: var(--radius); background: var(--panel);
+    padding: 2.25rem 1rem; text-align: center; cursor: pointer; transition: border-color .15s, background .15s;
+  }
+  #drop.over { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 7%, var(--panel)); }
+  #drop strong { display: block; margin-bottom: .3rem; }
+
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: .75rem; margin: 1rem 0; }
+  .tile { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: .75rem .9rem; }
+  .tile .n { font-size: 1.6rem; font-weight: 600; letter-spacing: -.02em; }
+  .tile .l { color: var(--muted); font-size: .75rem; text-transform: uppercase; letter-spacing: .04em; }
+  .tile.matched .n { color: var(--matched); }
+  .tile.ambiguous .n { color: var(--ambiguous); }
+  .tile.not_found .n { color: var(--missing); }
+
+  .toolbar { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; margin: 1rem 0 .5rem; }
+  .tabs { display: flex; flex-wrap: wrap; gap: .35rem; }
+  .tab.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .tab.active .muted { color: rgba(255, 255, 255, .82); }
+  input[type=search] {
+    font: inherit; font-size: .85rem; padding: .4rem .65rem; min-width: 210px;
+    border: 1px solid var(--border); border-radius: 7px; background: var(--panel); color: var(--text);
+  }
+
+  .note { border-radius: var(--radius); padding: .7rem .9rem; font-size: .85rem; margin: .75rem 0; }
+  .note.warn { background: var(--ambiguous-bg); border: 1px solid var(--ambiguous); color: var(--ambiguous); }
+  .note.err { background: var(--missing-bg); border: 1px solid var(--missing); color: var(--missing); }
+  .note.info { background: var(--panel); border: 1px solid var(--border); color: var(--muted); }
+
+  .tablewrap { overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius); background: var(--panel); }
+  table { border-collapse: collapse; width: 100%; font-size: .85rem; }
+  th { position: sticky; top: 0; z-index: 1; background: var(--panel); text-align: left; font-weight: 600;
+       color: var(--muted); font-size: .72rem; text-transform: uppercase; letter-spacing: .04em;
+       padding: .6rem .7rem; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  td { padding: .55rem .7rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+  tr.row:hover > td { background: color-mix(in srgb, var(--accent) 4%, transparent); }
+  td.num { text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .muted { color: var(--muted); }
+  .nowrap { white-space: nowrap; }
+
+  .badge { display: inline-block; padding: .1rem .45rem; border-radius: 999px; font-size: .72rem; font-weight: 600; white-space: nowrap; }
+  .badge.matched { background: var(--matched-bg); color: var(--matched); }
+  .badge.ambiguous { background: var(--ambiguous-bg); color: var(--ambiguous); }
+  .badge.not_found { background: var(--missing-bg); color: var(--missing); }
+  .badge.human { background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--accent); margin-left: .3rem; }
+  .badge.dup { background: var(--border); color: var(--muted); }
+
+  .cands { padding: .25rem 0 .6rem; }
+  .cand { display: flex; flex-wrap: wrap; gap: .5rem .8rem; align-items: center;
+          padding: .45rem .6rem; border: 1px solid var(--border); border-radius: 8px; margin-bottom: .35rem; }
+  .cand.chosen { border-color: var(--matched); background: var(--matched-bg); }
+  .cand .who { font-weight: 600; }
+  .cand .meta { color: var(--muted); font-size: .8rem; }
+  .expand { cursor: pointer; user-select: none; color: var(--accent); font-size: .8rem; background: none; border: none; padding: .15rem 0; }
+  footer { color: var(--muted); font-size: .8rem; margin-top: 1.5rem; }
+  @media (max-width: 992px) { .hide-sm { display: none; } body { padding: 0 .6rem 3rem; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>Membership CSV → Open Dental patient numbers</h1>
+      <div class="sub">read-only · nothing is written to Open Dental</div>
+    </div>
+    <div class="spacer"></div>
+    <div class="sub" id="source">checking patient source…</div>
+    <button id="reload" title="Re-read the OD patient table">Reload OD</button>
+  </header>
+
+  <div id="err" class="note err" hidden></div>
+
+  <div id="drop" tabindex="0" role="button" aria-label="Choose or drop a membership CSV">
+    <strong>Drop the membership CSV here, or click to choose one</strong>
+    <span class="sub">Expects <code>Patient Name, DOB, Email, Phone, Plan Start Date, Plan, Add-ons, Active</code></span>
+    <input type="file" id="file" accept=".csv,text/csv" hidden />
+  </div>
+
+  <div id="results" hidden>
+    <div class="tiles" id="tiles"></div>
+    <div id="collisions" class="note warn" hidden></div>
+    <div class="note info">
+      A sizeable <strong>not found</strong> bucket is expected — the membership roster and the
+      patient list are maintained separately. Surfacing that gap is part of the point, not a matcher bug.
+    </div>
+
+    <div class="toolbar">
+      <div class="tabs" id="tabs"></div>
+      <div class="spacer"></div>
+      <input type="search" id="search" placeholder="Search name, email, phone, PatNum…" />
+      <button id="exp-review">Export review</button>
+      <button id="exp-matched" class="primary">Export matched</button>
+    </div>
+
+    <div class="tablewrap">
+      <table>
+        <thead><tr>
+          <th class="num">Row</th>
+          <th>CSV patient</th>
+          <th class="hide-sm">DOB</th>
+          <th class="hide-sm">Contact</th>
+          <th class="hide-sm">Plan</th>
+          <th>Status</th>
+          <th>Open Dental match</th>
+          <th></th>
+        </tr></thead>
+        <tbody id="tbody"></tbody>
+      </table>
+    </div>
+    <footer id="foot"></footer>
+  </div>
+</div>
+
+<script type="module">
+const $ = (id) => document.getElementById(id)
+const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))
+
+let state = null
+let filter = 'all'
+let query = ''
+const expanded = new Set()
+
+const showError = (message) => {
+  $('err').hidden = !message
+  $('err').textContent = message ?? ''
+}
+
+const api = async (path, options) => {
+  const res = await fetch(path, options)
+  const body = await res.json().catch(() => ({ error: `${res.status} ${res.statusText}` }))
+  if (!res.ok) throw new Error(body.error ?? 'Request failed')
+  return body
+}
+
+const refreshStatus = async () => {
+  try {
+    const status = await api('/api/status')
+    $('source').textContent = status.odLoaded
+      ? `${status.odPatientCount} OD patients · ${status.source}`
+      : status.source + (status.configured ? '' : ' · not configured')
+    if (status.odError) showError(status.odError)
+  } catch (error) { showError(error.message) }
+}
+
+const upload = async (file) => {
+  showError(null)
+  $('drop').querySelector('strong').textContent = `Matching ${file.name}…`
+  try {
+    state = await api('/api/match', {
+      method: 'POST',
+      headers: { 'content-type': 'text/csv', 'x-file-name': encodeURIComponent(file.name) },
+      body: await file.text(),
+    })
+    render()
+    refreshStatus()
+  } catch (error) {
+    showError(error.message)
+  } finally {
+    $('drop').querySelector('strong').textContent = 'Drop the membership CSV here, or click to choose one'
+  }
+}
+
+const decide = async (rowNumber, patNum) => {
+  try {
+    state = await api('/api/decision', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(patNum === undefined ? { rowNumber } : { rowNumber, patNum }),
+    })
+    render()
+  } catch (error) { showError(error.message) }
+}
+
+const LABELS = { all: 'All', matched: 'Matched', ambiguous: 'Ambiguous', not_found: 'Not found', review: 'Needs review' }
+
+const visibleRows = () => {
+  const rows = state.rows.filter((row) => {
+    if (filter === 'all') return true
+    if (filter === 'review') return row.status !== 'matched' && row.resolvedBy === 'auto'
+    return row.status === filter
+  })
+  if (!query) return rows
+  const q = query.toLowerCase()
+  return rows.filter((row) =>
+    Object.values(row.csv).some((value) => String(value).toLowerCase().includes(q)) ||
+    row.candidates.some((c) => String(c.patNum).includes(q) || c.name.toLowerCase().includes(q)))
+}
+
+const renderTiles = () => {
+  const s = state.summary
+  const tiles = [
+    ['', 'CSV rows', s.total], ['matched', 'Matched', s.matched],
+    ['ambiguous', 'Ambiguous', s.ambiguous], ['not_found', 'Not found', s.not_found],
+    ['', 'Distinct PatNums', s.distinctPatients], ['', 'Duplicate rows', s.duplicateRows],
+    ['', 'Reviewed by hand', s.reviewed],
+  ]
+  $('tiles').innerHTML = tiles
+    .map(([cls, label, n]) => `<div class="tile ${cls}"><div class="n">${n}</div><div class="l">${label}</div></div>`)
+    .join('')
+
+  const collisions = state.summary.collidingPatNums
+  $('collisions').hidden = collisions.length === 0
+  if (collisions.length) {
+    $('collisions').innerHTML = `<strong>${collisions.length} PatNum(s) matched by more than one CSV row</strong> — a repeated export row, or a bad match: `
+      + collisions.map(([patNum, uses]) => `${patNum} (×${uses})`).join(', ')
+  }
+}
+
+const renderTabs = () => {
+  const counts = {
+    all: state.rows.length,
+    matched: state.summary.matched,
+    ambiguous: state.summary.ambiguous,
+    not_found: state.summary.not_found,
+    review: state.rows.filter((r) => r.status !== 'matched' && r.resolvedBy === 'auto').length,
+  }
+  $('tabs').innerHTML = Object.entries(LABELS)
+    .map(([key, label]) => `<button class="tab${filter === key ? ' active' : ''}" data-tab="${key}">${label} <span class="muted">${counts[key]}</span></button>`)
+    .join('')
+}
+
+const candidateHtml = (row, candidate) => {
+  const chosen = row.chosenPatNum === candidate.patNum
+  return `<div class="cand${chosen ? ' chosen' : ''}">
+    <span class="who">${esc(candidate.patNum)} · ${esc(candidate.name)}</span>
+    <span class="meta">${esc(candidate.dob || 'no DOB')} · ${esc(candidate.patStatus)}${candidate.email ? ' · ' + esc(candidate.email) : ''}${candidate.phones.length ? ' · ' + esc(candidate.phones.join(' / ')) : ''}</span>
+    <span class="meta">score ${candidate.score}${candidate.reasons.length ? ' — ' + esc(candidate.reasons.join(' + ')) : ''}</span>
+    <span class="spacer"></span>
+    <button data-confirm="${row.rowNumber}" data-patnum="${candidate.patNum}" ${chosen ? 'disabled' : ''}>${chosen ? 'Confirmed' : 'Confirm this one'}</button>
+  </div>`
+}
+
+const rowHtml = (row) => {
+  const chosen = row.candidates.find((c) => c.patNum === row.chosenPatNum)
+  const isOpen = expanded.has(row.rowNumber)
+  const contact = [row.csv.email, row.csv.phone].filter(Boolean).join('<br />')
+
+  const main = `<tr class="row">
+    <td class="num">${row.rowNumber}</td>
+    <td>${esc(row.csv.patientName) || '<span class="muted">(blank)</span>'}
+      ${row.duplicateGroup ? `<br /><span class="badge dup">${esc(row.duplicateGroup)}</span>` : ''}</td>
+    <td class="hide-sm nowrap">${esc(row.csv.dob)}</td>
+    <td class="hide-sm">${contact || '<span class="muted">—</span>'}</td>
+    <td class="hide-sm">${esc(row.csv.plan)}${row.csv.addOns ? `<br /><span class="muted">+ ${esc(row.csv.addOns)}</span>` : ''}
+      <br /><span class="muted">${esc(row.csv.active)}</span></td>
+    <td><span class="badge ${row.status}">${LABELS[row.status] ?? row.status}</span>
+      ${row.resolvedBy === 'human' ? '<span class="badge human">by hand</span>' : ''}
+      <br /><span class="muted">${esc(row.verdict)}</span></td>
+    <td>${chosen
+      ? `<strong>${chosen.patNum}</strong> ${esc(chosen.name)}<br /><span class="muted">${esc(chosen.dob || 'no DOB')} · ${esc(chosen.patStatus)}</span>`
+      : '<span class="muted">—</span>'}</td>
+    <td class="nowrap">
+      ${row.candidates.length ? `<button class="expand" data-expand="${row.rowNumber}">${isOpen ? 'Hide' : `${row.candidates.length} candidate${row.candidates.length > 1 ? 's' : ''}`}</button>` : '<span class="muted">no candidates</span>'}
+    </td>
+  </tr>`
+
+  if (!isOpen) return main
+
+  return main + `<tr><td></td><td colspan="7"><div class="cands">
+    ${row.candidates.map((candidate) => candidateHtml(row, candidate)).join('')}
+    <div style="display:flex;gap:.5rem;margin-top:.4rem">
+      <button data-confirm="${row.rowNumber}" data-patnum="none">None of these</button>
+      ${row.resolvedBy === 'human' ? `<button data-reset="${row.rowNumber}">Undo my decision</button>` : ''}
+    </div>
+  </div></td></tr>`
+}
+
+const render = () => {
+  $('results').hidden = false
+  renderTiles()
+  renderTabs()
+  const rows = visibleRows()
+  $('tbody').innerHTML = rows.length
+    ? rows.map(rowHtml).join('')
+    : '<tr><td colspan="8" class="muted" style="padding:1.5rem;text-align:center">No rows match this filter.</td></tr>'
+  $('foot').textContent =
+    `${state.fileName} · ${rows.length} of ${state.rows.length} rows shown · matched against ${state.odPatientCount} OD patients.`
+      + ' Exports reflect your decisions. Nothing has been written to Open Dental.'
+}
+
+// ── events ───────────────────────────────────────────────
+$('drop').addEventListener('click', () => $('file').click())
+$('drop').addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); $('file').click() } })
+$('file').addEventListener('change', (e) => { const f = e.target.files?.[0]; if (f) upload(f) })
+;['dragenter', 'dragover'].forEach((type) =>
+  $('drop').addEventListener(type, (e) => { e.preventDefault(); $('drop').classList.add('over') }))
+;['dragleave', 'drop'].forEach((type) =>
+  $('drop').addEventListener(type, (e) => { e.preventDefault(); $('drop').classList.remove('over') }))
+$('drop').addEventListener('drop', (e) => { const f = e.dataTransfer?.files?.[0]; if (f) upload(f) })
+
+$('tabs').addEventListener('click', (e) => {
+  const tab = e.target.closest('[data-tab]')
+  if (!tab) return
+  filter = tab.dataset.tab
+  render()
+})
+
+$('search').addEventListener('input', (e) => { query = e.target.value.trim(); render() })
+
+$('tbody').addEventListener('click', (e) => {
+  const expand = e.target.closest('[data-expand]')
+  if (expand) {
+    const n = Number(expand.dataset.expand)
+    expanded.has(n) ? expanded.delete(n) : expanded.add(n)
+    return render()
+  }
+  const confirm = e.target.closest('[data-confirm]')
+  if (confirm) {
+    return decide(Number(confirm.dataset.confirm), confirm.dataset.patnum === 'none' ? null : Number(confirm.dataset.patnum))
+  }
+  const reset = e.target.closest('[data-reset]')
+  if (reset) return decide(Number(reset.dataset.reset), undefined)
+})
+
+$('exp-review').addEventListener('click', () => { location.href = '/api/export?bucket=review' })
+$('exp-matched').addEventListener('click', () => { location.href = '/api/export?bucket=matched' })
+$('reload').addEventListener('click', async () => {
+  $('reload').disabled = true
+  showError(null)
+  try { await api('/api/od/reload', { method: 'POST' }) } catch (error) { showError(error.message) }
+  $('reload').disabled = false
+  refreshStatus()
+})
+
+refreshStatus()
+api('/api/results').then((data) => { state = data; render() }).catch(() => {})
+</script>
+</body>
+</html>

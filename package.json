@@ -1,0 +1,24 @@
+{
+  "name": "svdc-membership-sync",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "One-time local tool: match membership CSV rows to Open Dental patient numbers, ahead of discount-plan enrollment.",
+  "scripts": {
+    "web": "tsx src/server.ts",
+    "dev": "tsx watch src/server.ts",
+    "match": "tsx src/index.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "csv-parse": "^5.6.0",
+    "csv-stringify": "^6.5.2",
+    "dotenv": "^16.4.7",
+    "mysql2": "^3.12.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3"
+  }
+}

@@ -1,0 +1,21 @@
+Patient Name,DOB,Email,Phone,Plan Start Date,Plan,Add-ons,Active
+Stella Aguirre,3/14/1978,stella.aguirre@example.com,(831) 555-0142,1/15/2026,6 Month- Adult,,Yes
+stella aguirre,3/14/1978,,831-555-0142,1/15/2026,6 Month- Adult,,Yes
+Yolanda aguayo,7/2/1965,,8315550188,2/1/2026,3 Month- Perio,Fluoride,Yes
+Yolanda aguayo,7/2/1965,,8315550188,2/1/2026,3 Month- Perio,Fluoride,Yes
+Yolanda Aguayo,7/2/1965,yolanda.a@example.com,8315550188,2/1/2026,3 Month- Perio,Fluoride,Yes
+Bob Castellanos,11/30/1954,,,3/1/2026,6 Month- Adult,,Yes
+Maria Castellanos,11/30/1954,,+1 831 555 0177,3/1/2026,6 Month- Adult,Fluoride,Yes
+"Nguyen, Thanh",5/9/1990,thanh.nguyen@example.com,,1/5/2026,6 Month- Adult,,Yes
+Jose Ramirez Jr.,,jose.ramirez@example.com,8315550123,12/1/2025,3 Month- Perio,,No
+Katherine O'Brien,8/21/1982,,831.555.0199,4/1/2026,6 Month- Adult,,Yes
+Priya Raghunathan,2/17/1995,,,4/12/2026,6 Month- Adult,,Yes
+Michael Torres,6/6/1970,mtorres@example.com,8315550164,5/1/2026,3 Month- Perio,Fluoride,Yes
+Michelle Torres,6/6/1970,,8315550164,5/1/2026,6 Month- Adult,,Yes
+Jose Ramirez,,,,6/1/2026,3 Month- Perio,,Yes
+Gregory Vandermeer,1/1/1980,g.vandermeer@example.com,8315550300,5/1/2026,6 Month- Adult,,Yes
+Denise Whitlock,9/12/1988,denise.whitlock@example.com,(831) 555-0301,2/10/2026,6 Month- Adult,,Yes
+Arturo Benavides,4/25/1972,,831-555-0302,3/5/2026,3 Month- Perio,Fluoride,Yes
+Hana Kowalski,12/3/1996,hana.k@example.com,,4/2/2026,6 Month- Adult,,Yes
+Terrence Boyd,1/19/1959,,,5/20/2026,3 Month- Perio,,No
+Amina Osei,6/30/2001,amina.osei@example.com,8315550305,6/15/2026,6 Month- Adult,Fluoride,Yes

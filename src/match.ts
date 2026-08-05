@@ -7,16 +7,22 @@ import { canonicalFirstName, editDistance } from './normalize.ts'
  * not, because families share surnames and the CSV names are free-text. A row
  * therefore needs a name signal *and* at least one identity signal to be called
  * a match — everything else lands in the reviewable ambiguous bucket.
+ *
+ * Disagreement counts too, in both directions. A household shares a DOB-less
+ * phone and sometimes a birthday, so "same first name + shared phone" is not
+ * identity: a surname that actively disagrees has to pull the score back down,
+ * and a second, different email address on file is evidence against, not noise.
  */
 const WEIGHTS = {
   dobMatch: 4,
   dobConflict: -5,
   emailMatch: 4,
-  emailConflict: -1,
+  emailConflict: -2,
   phoneMatch: 3,
   phoneConflict: -1,
   lastMatch: 2,
   lastNear: 1,
+  lastConflict: -2,
   firstMatch: 2,
   firstNear: 1,
 } as const
@@ -30,6 +36,8 @@ export type Candidate = {
   patient: OdPatient
   score: number
   nameScore: number
+  /** Both sides carry a surname and they disagree — never an automatic match. */
+  lastConflict: boolean
   reasons: string[]
 }
 
@@ -57,7 +65,21 @@ export const matchRow = (row: MemberRow, index: OdIndex): MatchResult => {
     return { row, status: 'not_found', candidates: top3, margin: 0, verdict: notFoundReason(row, best) }
   }
 
-  if (best.nameScore === 0) {
+  // A surname that disagrees outright is disqualifying on its own, however well the
+  // identity signals line up. Sharing a first name and a household phone is what a
+  // parent and child look like; a marriage-name change looks the same from here, so
+  // it goes to review rather than to the not-found pile.
+  if (best.lastConflict) {
+    return {
+      row,
+      status: 'ambiguous',
+      candidates: top3,
+      margin,
+      verdict: `last name differs (CSV "${row.name.last}" vs OD "${best.patient.normalizedLast}")${emailNote(row, best.patient)} — needs a human look`,
+    }
+  }
+
+  if (best.nameScore <= 0) {
     return {
       row,
       status: 'ambiguous',
@@ -157,26 +179,25 @@ const score = (row: MemberRow, patient: OdPatient): Candidate => {
     }
   }
 
-  const nameScore = scoreName(row, patient, reasons)
-  total += nameScore
+  const name = scoreName(row, patient, reasons)
+  total += name.score
 
-  return { patient, score: total, nameScore, reasons }
+  return { patient, score: total, nameScore: name.score, lastConflict: name.lastConflict, reasons }
 }
 
 const scoreName = (row: MemberRow, patient: OdPatient, reasons: string[]) => {
-  const csvTokens = new Set(row.name.tokens)
   let nameScore = 0
 
-  // Last name: the CSV's own guess first, then any token, so "First Last" and
-  // "Last First" both land.
-  if (patient.normalizedLast !== '') {
-    if (row.name.last === patient.normalizedLast || csvTokens.has(patient.normalizedLast)) {
-      nameScore += WEIGHTS.lastMatch
-      reasons.push('last name')
-    } else if (isNear(row.name.last, patient.normalizedLast)) {
-      nameScore += WEIGHTS.lastNear
-      reasons.push('last name (approx)')
-    }
+  const last = compareLastName(row, patient)
+  if (last === 'match') {
+    nameScore += WEIGHTS.lastMatch
+    reasons.push('last name')
+  } else if (last === 'near') {
+    nameScore += WEIGHTS.lastNear
+    reasons.push('last name (approx)')
+  } else if (last === 'conflict') {
+    nameScore += WEIGHTS.lastConflict
+    reasons.push('last name differs')
   }
 
   const patientFirstForms = [patient.normalizedFirst, patient.normalizedPreferred].filter((value) => value !== '')
@@ -196,8 +217,31 @@ const scoreName = (row: MemberRow, patient: OdPatient, reasons: string[]) => {
     reasons.push('first name (approx)')
   }
 
-  return nameScore
+  return { score: nameScore, lastConflict: last === 'conflict' }
 }
+
+type LastNameVerdict = 'match' | 'near' | 'unknown' | 'conflict'
+
+/**
+ * Compared token-wise and against every CSV token, so "Garcia Lopez" still meets
+ * "Garcia" and "Last, First" order still lands. `unknown` is reserved for the cases
+ * where there is genuinely nothing to compare — the chart has no surname, or the CSV
+ * cell held a single word ("Yolanda") that gives us no surname to disagree with.
+ * Everything else that fails to line up is a real conflict and is scored as one.
+ */
+const compareLastName = (row: MemberRow, patient: OdPatient): LastNameVerdict => {
+  const patientTokens = patient.normalizedLast.split(' ').filter((token) => token !== '')
+  if (patientTokens.length === 0 || row.name.tokens.length === 0) return 'unknown'
+
+  if (patientTokens.some((token) => row.name.tokens.includes(token))) return 'match'
+  if (patientTokens.some((token) => row.name.tokens.some((csvToken) => isNear(csvToken, token)))) return 'near'
+
+  return row.name.last === '' ? 'unknown' : 'conflict'
+}
+
+/** Only worth saying when both sides carried an address and they disagreed too. */
+const emailNote = (row: MemberRow, patient: OdPatient) =>
+  row.email !== '' && patient.email !== '' && row.email !== patient.email ? ' and so does the email' : ''
 
 /** One typo apart, and long enough that one edit is not most of the word. */
 const isNear = (a: string, b: string) => a !== '' && b !== '' && a.length >= 4 && b.length >= 4 && editDistance(a, b, 1) <= 1

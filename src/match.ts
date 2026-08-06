@@ -31,6 +31,13 @@ const MATCH_MIN_SCORE = 7
 /** How far ahead of the runner-up the winner must be to be called unambiguous. */
 const MATCH_MIN_MARGIN = 2
 const AMBIGUOUS_MIN_SCORE = 4
+/**
+ * Floor for *showing* a candidate in the review list. A first-name-only hit scores 1,
+ * and sitting next to a real match scoring 15 it is nothing but a misclick waiting to
+ * happen. Display only: scoring, the margin and the surname-conflict check all still
+ * run against the full candidate list, so no row's bucket changes because of this.
+ */
+const CANDIDATE_DISPLAY_MIN_SCORE = 4
 
 export type Candidate = {
   patient: OdPatient
@@ -46,7 +53,11 @@ export type MatchStatus = 'matched' | 'ambiguous' | 'not_found'
 export type MatchResult = {
   row: MemberRow
   status: MatchStatus
-  /** Top candidates, best first — at most 3, for the review sheet. */
+  /**
+   * Top candidates, best first — at most 3, for the review sheet, and only those at or
+   * above `CANDIDATE_DISPLAY_MIN_SCORE`. This is the display list, not the list the
+   * verdict was computed from; it can be empty while `verdict` still cites a near miss.
+   */
   candidates: Candidate[]
   margin: number
   /** Why this landed in its bucket, in one line. */
@@ -59,7 +70,7 @@ export const matchRow = (row: MemberRow, index: OdIndex): MatchResult => {
   const runnerUp = candidates.at(1)
   const margin = best ? best.score - (runnerUp?.score ?? 0) : 0
 
-  const top3 = candidates.slice(0, 3)
+  const top3 = candidates.filter((candidate) => candidate.score >= CANDIDATE_DISPLAY_MIN_SCORE).slice(0, 3)
 
   if (!best || best.score < AMBIGUOUS_MIN_SCORE) {
     return { row, status: 'not_found', candidates: top3, margin: 0, verdict: notFoundReason(row, best) }
@@ -173,7 +184,8 @@ const score = (row: MemberRow, patient: OdPatient): Candidate => {
   if (row.phone !== '' && patient.phones.length > 0) {
     if (patient.phones.includes(row.phone)) {
       total += WEIGHTS.phoneMatch
-      reasons.push('phone')
+      const source = patient.phoneSource.get(row.phone)
+      reasons.push(source === undefined ? 'phone' : `phone (${source})`)
     } else {
       total += WEIGHTS.phoneConflict
     }

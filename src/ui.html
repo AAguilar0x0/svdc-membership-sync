@@ -95,6 +95,10 @@
   .badge.not_found { background: var(--missing-bg); color: var(--missing); }
   .badge.human { background: color-mix(in srgb, var(--accent) 15%, transparent); color: var(--accent); margin-left: .3rem; }
   .badge.dup { background: var(--border); color: var(--muted); }
+  .badge.flag { background: var(--ambiguous-bg); color: var(--ambiguous); }
+  /* A status read off the top candidate rather than a confirmed match — same fact, less certain. */
+  .unmatched { opacity: .65; }
+  .tiny { font-size: .72rem; }
 
   .cands { padding: .25rem 0 .6rem; }
   .cand { display: flex; flex-wrap: wrap; gap: .5rem .8rem; align-items: center;
@@ -153,6 +157,7 @@
           <th class="hide-sm">Plan</th>
           <th>Status</th>
           <th>Open Dental match</th>
+          <th>Chart status</th>
           <th></th>
         </tr></thead>
         <tbody id="tbody"></tbody>
@@ -281,10 +286,24 @@ const candidateHtml = (row, candidate) => {
   </div>`
 }
 
+/**
+ * OD chart status. When the row matched, it is the matched patient's. When it did not,
+ * it falls back to the top candidate's, dimmed — so "this row failed because the chart
+ * is archived" is visible without opening the candidate list. Anything but Patient is flagged.
+ */
+const chartStatusHtml = (row, chosen) => {
+  const source = chosen ?? row.candidates[0]
+  if (!source) return '<span class="muted">—</span>'
+  const label = `<span class="badge ${source.patStatus === 'Patient' ? 'dup' : 'flag'}">${esc(source.patStatus)}</span>`
+  return chosen
+    ? label
+    : `<span class="unmatched">${label}</span><br /><span class="muted tiny">top candidate</span>`
+}
+
 const rowHtml = (row) => {
   const chosen = row.candidates.find((c) => c.patNum === row.chosenPatNum)
   const isOpen = expanded.has(row.rowNumber)
-  const contact = [row.csv.email, row.csv.phone].filter(Boolean).join('<br />')
+  const contact = [row.csv.email, row.csv.phone].filter(Boolean).map(esc).join('<br />')
 
   const main = `<tr class="row">
     <td class="num">${row.rowNumber}</td>
@@ -298,8 +317,9 @@ const rowHtml = (row) => {
       ${row.resolvedBy === 'human' ? '<span class="badge human">by hand</span>' : ''}
       <br /><span class="muted">${esc(row.verdict)}</span></td>
     <td>${chosen
-      ? `<strong>${chosen.patNum}</strong> ${esc(chosen.name)}<br /><span class="muted">${esc(chosen.dob || 'no DOB')} · ${esc(chosen.patStatus)}</span>`
+      ? `<strong>${chosen.patNum}</strong> ${esc(chosen.name)}<br /><span class="muted">${esc(chosen.dob || 'no DOB')}</span>`
       : '<span class="muted">—</span>'}</td>
+    <td class="nowrap">${chartStatusHtml(row, chosen)}</td>
     <td class="nowrap">
       ${row.candidates.length ? `<button class="expand" data-expand="${row.rowNumber}">${isOpen ? 'Hide' : `${row.candidates.length} candidate${row.candidates.length > 1 ? 's' : ''}`}</button>` : '<span class="muted">no candidates</span>'}
     </td>
@@ -307,7 +327,7 @@ const rowHtml = (row) => {
 
   if (!isOpen) return main
 
-  return main + `<tr><td></td><td colspan="7"><div class="cands">
+  return main + `<tr><td></td><td colspan="8"><div class="cands">
     ${row.candidates.map((candidate) => candidateHtml(row, candidate)).join('')}
     <div style="display:flex;gap:.5rem;margin-top:.4rem">
       <button data-confirm="${row.rowNumber}" data-patnum="none">None of these</button>
@@ -323,7 +343,7 @@ const render = () => {
   const rows = visibleRows()
   $('tbody').innerHTML = rows.length
     ? rows.map(rowHtml).join('')
-    : '<tr><td colspan="8" class="muted" style="padding:1.5rem;text-align:center">No rows match this filter.</td></tr>'
+    : '<tr><td colspan="9" class="muted" style="padding:1.5rem;text-align:center">No rows match this filter.</td></tr>'
   $('foot').textContent =
     `${state.fileName} · ${rows.length} of ${state.rows.length} rows shown · matched against ${state.odPatientCount} OD patients.`
       + ' Exports reflect your decisions. Nothing has been written to Open Dental.'

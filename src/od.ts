@@ -17,6 +17,9 @@ export const PAT_STATUS_LABELS: Record<number, string> = {
   5: 'Deceased',
 }
 
+/** Which column a number came from. A household shares a landline but rarely a mobile. */
+export type PhoneSource = 'home' | 'wireless' | 'work'
+
 export type OdPatient = {
   patNum: number
   fname: string
@@ -29,6 +32,13 @@ export type OdPatient = {
   dob: string
   email: string
   phones: string[]
+  /**
+   * Normalised number → the field it was filed under, so a phone match can say which
+   * one it was: "phone (wireless)" is identity evidence in a way that "phone (home)"
+   * is not. First field wins when the same number is filed twice, which keeps the
+   * weaker (household) reading rather than the flattering one.
+   */
+  phoneSource: Map<string, PhoneSource>
   /** Normalised forms, precomputed once because every CSV row compares against these. */
   normalizedFirst: string
   normalizedLast: string
@@ -103,6 +113,16 @@ const toOdPatient = (record: PatientRecord): OdPatient => {
   const normalizedLast = normalizeName(lname)
   const normalizedPreferred = normalizeName(preferred)
 
+  const phoneSource = new Map<string, PhoneSource>()
+  for (const [source, raw] of [
+    ['home', record.HmPhone],
+    ['wireless', record.WirelessPhone],
+    ['work', record.WkPhone],
+  ] as const) {
+    const phone = normalizePhone(raw)
+    if (phone !== '' && !phoneSource.has(phone)) phoneSource.set(phone, source)
+  }
+
   return {
     patNum: Number(record.PatNum),
     fname,
@@ -114,9 +134,8 @@ const toOdPatient = (record: PatientRecord): OdPatient => {
     patStatusLabel: PAT_STATUS_LABELS[record.PatStatus] ?? String(record.PatStatus),
     dob: normalizeDob(record.Birthdate),
     email: normalizeEmail(record.Email),
-    phones: [
-      ...new Set([record.HmPhone, record.WirelessPhone, record.WkPhone].map(normalizePhone).filter((p) => p !== '')),
-    ],
+    phones: [...phoneSource.keys()],
+    phoneSource,
     normalizedFirst,
     normalizedLast,
     normalizedPreferred,

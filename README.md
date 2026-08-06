@@ -40,7 +40,8 @@ pnpm match ./members.csv --out reports --active-only
 | CLI flag | Effect |
 | --- | --- |
 | `--out <dir>` | where the report lands (default `out/`) |
-| `--active-only` | skip rows whose `Active` column is falsy |
+| `--active-only` | skip rows whose `Active` column is falsy (CSV side) |
+| `--active-charts-only` | only consider OD patients with `PatStatus = Patient` (OD side) |
 | `--include-deleted` | also consider OD patients with `PatStatus = Deleted` (excluded by default) |
 | `--fixture <file>` | match against a JSON patient fixture instead of the DB — offline dry run |
 | `--subs-fixture <file>` | `discountplansub` fixture, so the plan check runs offline too |
@@ -61,6 +62,13 @@ reachable from the network. Set `PORT` to move it.
   scores 1, and next to a real match it is only a misclick. The floor is display-only: the
   score, the margin and the surname check all still run against every candidate, so no
   row's bucket depends on it.
+- **Active charts only** — a toggle that narrows the candidate set to `PatStatus = Patient`
+  and re-matches in place. Off by default. Once both have been seen the page shows the two
+  splits side by side (`matched 13 → 12, not found 6 → 7`), which is the point: restricting
+  the candidates can only move rows *out* of matched, and the question is how many. Rows
+  that stop matching are members sitting on an inactive or archived chart — a real finding
+  either way, but one the chart-status column can no longer explain once the candidate is
+  filtered out. The CLI prints the same comparison on every run.
 - **Chart status** — the OD `PatStatus` of the matched patient. When nothing matched it
   falls back to the top candidate's, dimmed, so "this row failed because the chart is
   archived" is visible without opening anything. Anything other than `Patient` is flagged.

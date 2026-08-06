@@ -19,6 +19,22 @@ Design detail for the discount-plan work lives in
 > advice to read that column is superseded — it is zero for every patient in this install,
 > so a report built on it calls the whole practice unenrolled while looking like it worked.
 
+## Active-charts filter — built, needs his call
+
+Asked twice (8/5) and now in: a toggle in the UI and `--active-charts-only` on the CLI,
+narrowing candidates to `PatStatus = Patient`. **Off by default**, because it is a real
+narrowing rather than a display filter and the point was to compare, not to assume.
+
+Both splits are always reported. On the sample: matched 13 → 12, not found 6 → 7, one
+inactive chart excluded.
+
+- [ ] Run it against the real export and show him both splits — the comparison he asked
+      for has still never been run on real data.
+- [ ] Then decide the default. The tension worth putting to him: the chart-status column
+      exists so a row that failed because the chart is archived *says so*. Filtering those
+      charts out removes the candidate, so the row goes quiet — right answer, no
+      explanation. Default-off keeps the explanation; default-on keeps the noise down.
+
 ## Blocked on Matthew
 
 - [ ] Confirm the real `Plan` / `Add-ons` strings before the mapping table is hardcoded.

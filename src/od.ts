@@ -20,6 +20,21 @@ export const PAT_STATUS_LABELS: Record<number, string> = {
 /** Which column a number came from. A household shares a landline but rarely a mobile. */
 export type PhoneSource = 'home' | 'wireless' | 'work'
 
+/** `PatStatus = 0`. Everything else — Inactive, Archived, NonPatient, Deceased — is not a current patient. */
+export const ACTIVE_PAT_STATUS = 0
+
+/**
+ * Restrict the candidate set to charts that are currently active.
+ *
+ * This is a real narrowing, not a display filter: an inactive chart stops being matchable
+ * at all, so its rows fall to not-found rather than matching a patient who has left the
+ * practice. The cost is that the chart-status column can no longer explain *why* — the
+ * candidate it would have named is gone. Which is the better default is a judgement call
+ * about the data, so it is a toggle and both splits are reported side by side.
+ */
+export const activeChartsOnly = (patients: OdPatient[]) =>
+  patients.filter((patient) => patient.patStatus === ACTIVE_PAT_STATUS)
+
 export type OdPatient = {
   patNum: number
   fname: string

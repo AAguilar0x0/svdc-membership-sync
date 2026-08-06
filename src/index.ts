@@ -4,8 +4,9 @@ import { parseArgs } from 'node:util'
 import 'dotenv/config'
 
 import { readMemberCsv } from './csv.ts'
-import { matchRow } from './match.ts'
+import { matchRow, type MatchResult, type MatchStatus } from './match.ts'
 import {
+  activeChartsOnly,
   buildOdIndex,
   loadActiveDiscountSubs,
   loadActiveDiscountSubsFromFixture,
@@ -31,6 +32,7 @@ const main = async () => {
       'subs-fixture': { type: 'string' },
       'include-deleted': { type: 'boolean', default: false },
       'active-only': { type: 'boolean', default: false },
+      'active-charts-only': { type: 'boolean', default: false },
       help: { type: 'boolean', short: 'h', default: false },
     },
   })
@@ -78,9 +80,17 @@ const main = async () => {
 
   if (planCheckEnabled) console.log(`Loaded ${subs.byPatNum.size} active discount subscription(s).`)
 
-  // Match, then report — nothing is persisted anywhere
-  const index = buildOdIndex(patients)
-  const results = rows.map((row) => matchRow(row, index))
+  // Match twice — every chart, and active charts only. Both are cheap, and the question
+  // asked of this tool is not "which is right" but "how much difference does it make",
+  // which needs the two splits side by side rather than one of them and an assertion.
+  const activePatients = activeChartsOnly(patients)
+  const allIndex = buildOdIndex(patients)
+  const activeIndex = buildOdIndex(activePatients)
+  const allResults = rows.map((row) => matchRow(row, allIndex))
+  const activeResults = rows.map((row) => matchRow(row, activeIndex))
+  printChartFilterComparison(allResults, activeResults, patients.length, activePatients.length)
+
+  const results = values['active-charts-only'] ? activeResults : allResults
 
   const outDir = resolve(values.out)
   const { resolved, duplicateGroups, checks } = writeReport(results, outDir, new Map(), subs, planCheckEnabled)
@@ -102,7 +112,9 @@ Options
                        (see sample/od-discount-subs.sample.json). Against the DB the
                        plan check always runs; with --fixture and no subs it goes dark
                        rather than reporting every member as unenrolled.
-  --active-only        only process rows whose Active column is truthy
+  --active-only        only process rows whose Active column is truthy (CSV side)
+  --active-charts-only only consider OD patients with PatStatus = Patient (OD side).
+                       Both splits are printed either way; this picks which one is written
   --include-deleted    also consider OD patients with PatStatus = Deleted
   -h, --help           show this
 
@@ -145,6 +157,40 @@ const printSummary = (
   the patient list are maintained separately, so surfacing that gap is part of the
   point. Nothing has been written to Open Dental. Review these files before enrolling.
 `)
+}
+
+/**
+ * Both candidate sets, side by side. Restricting to active charts can only ever move rows
+ * out of matched — the question is how many, and whether the ones it drops were matches
+ * anybody wanted. On this practice's data that is a handful; on a roster that has drifted
+ * for years it might not be, which is why it is measured rather than assumed.
+ */
+const printChartFilterComparison = (
+  allResults: MatchResult[],
+  activeResults: MatchResult[],
+  patientCount: number,
+  activePatientCount: number,
+) => {
+  const count = (results: MatchResult[], status: MatchStatus) => results.filter((r) => r.status === status).length
+  const delta = (n: number) => (n === 0 ? '' : n > 0 ? `  (+${n})` : `  (${n})`)
+  const line = (status: MatchStatus, label: string) => {
+    const before = count(allResults, status)
+    const after = count(activeResults, status)
+    return `  ${label.padEnd(20)}${String(before).padStart(4)} →${String(after).padStart(5)}${delta(after - before)}`
+  }
+
+  console.log(`
+── Active charts only? ──────────────────────────
+  candidate patients  ${String(patientCount).padStart(4)} →${String(activePatientCount).padStart(5)}${delta(activePatientCount - patientCount)}
+
+${line('matched', 'matched')}
+${line('ambiguous', 'ambiguous')}
+${line('not_found', 'not found')}
+
+  Left column is every chart except Deleted; right is PatStatus = Patient only.
+  Rows that stop matching are members sitting on an inactive or archived chart — a
+  real finding either way, but one the chart-status column can no longer explain once
+  the candidate is filtered out. ${'--active-charts-only'} picks the right-hand run.`)
 }
 
 /**

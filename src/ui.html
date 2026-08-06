@@ -65,6 +65,9 @@
   .tile.not_found .n { color: var(--missing); }
 
   .toolbar { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; margin: 1rem 0 .5rem; }
+  .toggle { display: inline-flex; align-items: center; gap: .35rem; font-size: .85rem; color: var(--muted);
+            border: 1px solid var(--border); border-radius: 7px; padding: .35rem .6rem; cursor: pointer; }
+  .toggle:has(:checked) { border-color: var(--accent); color: var(--accent); }
   .tabs { display: flex; flex-wrap: wrap; gap: .35rem; }
   .tab.active { background: var(--accent); border-color: var(--accent); color: #fff; }
   .tab.active .muted { color: rgba(255, 255, 255, .82); }
@@ -135,6 +138,7 @@
     <div class="tiles" id="tiles"></div>
     <div id="collisions" class="note warn" hidden></div>
     <div id="planwarn" class="note err" hidden></div>
+    <div id="chartfilter" class="note info" hidden></div>
     <div class="note info">
       A sizeable <strong>not found</strong> bucket is expected — the membership roster and the
       patient list are maintained separately. Surfacing that gap is part of the point, not a matcher bug.
@@ -143,6 +147,9 @@
     <div class="toolbar">
       <div class="tabs" id="tabs"></div>
       <div class="spacer"></div>
+      <label class="toggle" title="Only consider OD charts with PatStatus = Patient">
+        <input type="checkbox" id="active-charts" /> Active charts only
+      </label>
       <input type="search" id="search" placeholder="Search name, email, phone, PatNum…" />
       <button id="exp-review">Export review</button>
       <button id="exp-matched" class="primary">Export matched</button>
@@ -296,6 +303,33 @@ const renderTiles = () => {
   }
 }
 
+/**
+ * Both splits, once both have been seen. Restricting to active charts can only move rows
+ * out of matched, so the useful question is how many — kept side by side rather than
+ * replacing one number with another and leaving the reviewer to remember the old one.
+ */
+const summariesByFilter = {}
+
+const renderChartFilter = () => {
+  summariesByFilter[String(state.activeChartsOnly)] = state.summary
+  $('active-charts').checked = state.activeChartsOnly === true
+
+  const every = summariesByFilter.false
+  const active = summariesByFilter.true
+  $('chartfilter').hidden = !(every && active)
+  if (!every || !active) return
+
+  const delta = (a, b) => `${a} → ${b}`
+  $('chartfilter').innerHTML =
+    `<strong>Active charts only</strong> — every chart vs <code>PatStatus = Patient</code>: `
+    + `matched ${delta(every.matched, active.matched)}, `
+    + `ambiguous ${delta(every.ambiguous, active.ambiguous)}, `
+    + `not found ${delta(every.not_found, active.not_found)}`
+    + (state.inactiveChartCount ? ` · ${state.inactiveChartCount} inactive or archived chart(s) excluded.` : '.')
+    + ' Rows that stop matching are members sitting on a chart that is no longer active —'
+    + ' still a finding, but the chart-status column can no longer say so once the candidate is filtered out.'
+}
+
 const renderTabs = () => {
   const counts = {
     all: state.rows.length,
@@ -391,6 +425,7 @@ const rowHtml = (row) => {
 const render = () => {
   $('results').hidden = false
   renderTiles()
+  renderChartFilter()
   renderTabs()
   const rows = visibleRows()
   $('tbody').innerHTML = rows.length
@@ -419,6 +454,24 @@ $('tabs').addEventListener('click', (e) => {
 })
 
 $('search').addEventListener('input', (e) => { query = e.target.value.trim(); render() })
+
+$('active-charts').addEventListener('change', async (e) => {
+  const activeChartsOnly = e.target.checked
+  e.target.disabled = true
+  try {
+    const payload = await api('/api/od/active-charts', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ activeChartsOnly }),
+    })
+    if (payload.rows) { state = payload; render() }
+    refreshStatus()
+  } catch (error) {
+    e.target.checked = !activeChartsOnly
+    showError(error.message)
+  }
+  e.target.disabled = false
+})
 
 $('tbody').addEventListener('click', (e) => {
   const expand = e.target.closest('[data-expand]')

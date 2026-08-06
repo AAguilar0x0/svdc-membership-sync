@@ -6,7 +6,9 @@ import 'dotenv/config'
 
 import { parseMemberCsv } from './csv.ts'
 import { matchRow, type MatchResult } from './match.ts'
+import { type MemberRow } from './csv.ts'
 import {
+  activeChartsOnly,
   buildOdIndex,
   loadActiveDiscountSubs,
   loadActiveDiscountSubsFromFixture,
@@ -51,6 +53,8 @@ const PLAN_CHECK_ENABLED = FIXTURE === undefined || SUBS_FIXTURE !== undefined
 /** In-memory only — nothing about a run is persisted to disk unless the user exports. */
 type Session = {
   fileName: string
+  /** Kept so the candidate set can be narrowed and re-matched without re-uploading. */
+  rows: MemberRow[]
   results: MatchResult[]
   duplicateGroups: Map<number, string>
   decisions: Decisions
@@ -59,14 +63,22 @@ type Session = {
 }
 
 let session: Session | undefined
+let odPatients: OdPatient[] = []
 let odIndex: OdIndex | undefined
 let odSubs: ActiveSubs = { byPatNum: new Map(), multipleActive: [] }
 let odError: string | undefined
 
+/**
+ * Narrow the candidate set to `PatStatus = Patient`. Off by default: it is a real
+ * narrowing, and which way it should sit is a question about this practice's data that
+ * the toggle exists to answer.
+ */
+let activeChartsFilter = false
+
 const loadOd = async (force = false) => {
   if (odIndex && !force) return odIndex
 
-  const patients: OdPatient[] = FIXTURE
+  odPatients = FIXTURE
     ? await loadOdPatientsFromFixture(resolve(FIXTURE))
     : await loadOdPatients(requireDbUrl())
 
@@ -76,10 +88,12 @@ const loadOd = async (force = false) => {
       : await loadActiveDiscountSubs(requireDbUrl())
   }
 
-  odIndex = buildOdIndex(patients)
+  odIndex = buildIndex()
   odError = undefined
   return odIndex
 }
+
+const buildIndex = () => buildOdIndex(activeChartsFilter ? activeChartsOnly(odPatients) : odPatients)
 
 const requireDbUrl = () => {
   const url = process.env.OD_DB_URL
@@ -151,6 +165,8 @@ const buildPayload = (current: Session) => {
     loadedAt: current.loadedAt,
     odPatientCount: current.odPatientCount,
     planCheckEnabled: PLAN_CHECK_ENABLED,
+    activeChartsOnly: activeChartsFilter,
+    inactiveChartCount: odPatients.length - activeChartsOnly(odPatients).length,
     summary: summarize(resolved, current.duplicateGroups),
     planSummary: PLAN_CHECK_ENABLED ? summarizePlans(checks) : null,
     rows: resolved.map((row) => ({
@@ -175,6 +191,7 @@ const handlers: Record<string, (req: IncomingMessage, res: ServerResponse, url: 
       odPatientCount: odIndex?.patients.length ?? 0,
       planCheckEnabled: PLAN_CHECK_ENABLED,
       activeSubCount: odSubs.byPatNum.size,
+      activeChartsOnly: activeChartsFilter,
       odError,
       hasSession: session !== undefined,
     })
@@ -195,6 +212,7 @@ const handlers: Record<string, (req: IncomingMessage, res: ServerResponse, url: 
 
     session = {
       fileName,
+      rows,
       results: rows.map((row) => matchRow(row, index)),
       duplicateGroups: groupDuplicates(rows),
       decisions: new Map(),
@@ -203,6 +221,25 @@ const handlers: Record<string, (req: IncomingMessage, res: ServerResponse, url: 
     }
 
     json(res, 200, buildPayload(session))
+  },
+
+  /**
+   * Flip the candidate set between every chart and active charts only, and re-match in
+   * place. Reviewer decisions are kept: a confirmed PatNum that survives the narrowing
+   * still resolves, and one that does not falls back to the automatic verdict rather than
+   * silently pointing at a patient no longer in the set.
+   */
+  'POST /api/od/active-charts': async (req, res) => {
+    const body = JSON.parse((await readBody(req)).toString('utf8')) as { activeChartsOnly?: unknown }
+    activeChartsFilter = body.activeChartsOnly === true
+
+    odIndex = buildIndex()
+    if (session) {
+      session.results = session.rows.map((row) => matchRow(row, odIndex!))
+      session.odPatientCount = odIndex.patients.length
+    }
+
+    json(res, 200, session ? buildPayload(session) : { activeChartsOnly: activeChartsFilter })
   },
 
   'GET /api/results': async (_req, res) => {

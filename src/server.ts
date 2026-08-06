@@ -61,6 +61,15 @@ const requireDbUrl = () => {
   return url
 }
 
+/**
+ * Binding to loopback keeps the network out, but it does not stop DNS rebinding: a page
+ * open in the operator's browser can point its own hostname at 127.0.0.1 and then read
+ * /api/results and /api/export, which are PHI. Only a loopback `Host` is served.
+ */
+const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]'])
+const isLoopbackHost = (host: string | undefined) =>
+  LOOPBACK_HOSTS.has((host ?? '').replace(/:\d+$/, '').toLowerCase())
+
 const json = (res: ServerResponse, status: number, body: unknown) => {
   const payload = JSON.stringify(body)
   res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'content-length': Buffer.byteLength(payload) })
@@ -204,6 +213,10 @@ const handlers: Record<string, (req: IncomingMessage, res: ServerResponse, url: 
 
 const server = createServer((req, res) => {
   void (async () => {
+    if (!isLoopbackHost(req.headers.host)) {
+      return json(res, 403, { error: 'Blocked: this tool only serves requests addressed to localhost.' })
+    }
+
     const url = new URL(req.url ?? '/', `http://localhost:${PORT}`)
     const handler = handlers[`${req.method} ${url.pathname}`]
 

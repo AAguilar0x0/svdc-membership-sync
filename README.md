@@ -53,9 +53,16 @@ reachable from the network. Set `PORT` to move it.
 - **A collision banner** when one PatNum is claimed by more than one CSV row.
 - **Tabs and search**, including a **Needs review** tab: everything the matcher would not
   call on its own.
-- **Expand any row** to see every candidate it considered, with its score and the exact
-  signals that fired (`DOB + phone + last name`). For an ambiguous row you pick the right
-  patient, or say **None of these**. **Undo my decision** puts it back to the automatic verdict.
+- **Expand any row** to see the candidates it considered, with their score and the exact
+  signals that fired (`DOB + phone (wireless) + last name`). For an ambiguous row you pick
+  the right patient, or say **None of these**. **Undo my decision** puts it back to the
+  automatic verdict. Candidates scoring below 4 are not listed — a first-name-only hit
+  scores 1, and next to a real match it is only a misclick. The floor is display-only: the
+  score, the margin and the surname check all still run against every candidate, so no
+  row's bucket depends on it.
+- **Chart status** — the OD `PatStatus` of the matched patient. When nothing matched it
+  falls back to the top candidate's, dimmed, so "this row failed because the chart is
+  archived" is visible without opening anything. Anything other than `Patient` is flagged.
 - **Export review / Export matched** download CSVs that reflect your decisions, with a
   `Resolved By` column recording `auto` vs `human`.
 
@@ -143,13 +150,18 @@ not a failure.
 | Signal | Weight |
 | --- | --- |
 | DOB matches / conflicts | +4 / −5 |
-| Email matches / conflicts | +4 / −1 |
+| Email matches / conflicts | +4 / −2 |
 | Phone matches any of `HmPhone`, `WirelessPhone`, `WkPhone` / conflicts | +3 / −1 |
+| Last name actively disagrees | −2, and never an automatic match |
 | Last name exact / one typo | +2 / +1 |
 | First name exact (incl. `Preferred` and a nickname table) / one typo | +2 / +1 |
 
 Thresholds: **matched** needs ≥ 7 and a ≥ 2 margin over the runner-up; **ambiguous**
 is ≥ 4; below that it is **not found**.
+
+A phone match names the field it hit — `phone (wireless)` rather than `phone`. The weight
+is the same either way, but a household shares a landline and rarely shares a mobile, so
+which one fired is the difference between weak and strong evidence when a human reads it.
 
 Candidates are blocked on the hard signals — a patient is only scored if it shares a
 DOB, email, phone or name token with the row — so a row sharing nothing is genuinely
@@ -169,11 +181,21 @@ treat it as a bug in the matcher.
   conversion cannot shift a birthdate by a day.
 - The member export and the report are PHI. `.gitignore` covers `out/`, `data/` and
   `*.xlsx`; keep the real CSV out of the repo.
+- The server answers only requests whose `Host` is loopback. Binding to `127.0.0.1` keeps
+  the network out but not DNS rebinding — without the check, a page open in the operator's
+  browser could point its own hostname at `127.0.0.1` and read `/api/results`.
+- Every value rendered into the results table is escaped, including the ones that come
+  from the CSV rather than from OD.
 
 ## Still open before enrollment
 
-- The Open Dental discount-plan identifiers for each plan named in the CSV.
-- Read a patient's existing plan subscriptions before adding one, to decide add-vs-update.
-  The create call has no idempotency key, so a blind re-run double-subscribes.
+Verifying which discount plan each member is *already* on is scoped in
+[`docs/discount-plan-verification.md`](docs/discount-plan-verification.md) — read-only
+report first, writes only after it has been reviewed. Also open:
+
+- Confirm the real `Plan` / `Add-ons` strings in the live export before the plan mapping
+  is hardcoded.
+- Read a patient's existing plan subscriptions immediately before writing, not from the
+  report. The create call has no idempotency key, so a blind re-run double-subscribes.
 - Enrollment would be the first write this project makes to live Open Dental. Confirm
   that explicitly with the practice owner before the first run.

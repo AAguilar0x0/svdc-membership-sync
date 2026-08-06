@@ -4,3 +4,4 @@ out/
 # never commit a real member export — it is PHI
 *.xlsx
 data/
+.DS_Store

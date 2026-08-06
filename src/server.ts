@@ -6,11 +6,22 @@ import 'dotenv/config'
 
 import { parseMemberCsv } from './csv.ts'
 import { matchRow, type MatchResult } from './match.ts'
-import { buildOdIndex, loadOdPatients, loadOdPatientsFromFixture, type OdIndex, type OdPatient } from './od.ts'
 import {
+  buildOdIndex,
+  loadActiveDiscountSubs,
+  loadActiveDiscountSubsFromFixture,
+  loadOdPatients,
+  loadOdPatientsFromFixture,
+  type ActiveSubs,
+  type OdIndex,
+  type OdPatient,
+} from './od.ts'
+import {
+  checkPlans,
   groupDuplicates,
   resolveRows,
   summarize,
+  summarizePlans,
   toCsv,
   toReviewRecord,
   type Decisions,
@@ -27,7 +38,15 @@ import {
 
 const PORT = Number(process.env.PORT ?? 5178)
 const FIXTURE = process.env.OD_FIXTURE
+const SUBS_FIXTURE = process.env.OD_SUBS_FIXTURE
 const UI_PATH = fileURLToPath(new URL('./ui.html', import.meta.url))
+
+/**
+ * Against the database the plan check always runs. Against a patient fixture it needs a
+ * subscription fixture too — without one, every member would be reported as having no plan
+ * on file, which is a wrong answer wearing the clothes of a real one. So it goes dark instead.
+ */
+const PLAN_CHECK_ENABLED = FIXTURE === undefined || SUBS_FIXTURE !== undefined
 
 /** In-memory only — nothing about a run is persisted to disk unless the user exports. */
 type Session = {
@@ -41,6 +60,7 @@ type Session = {
 
 let session: Session | undefined
 let odIndex: OdIndex | undefined
+let odSubs: ActiveSubs = { byPatNum: new Map(), multipleActive: [] }
 let odError: string | undefined
 
 const loadOd = async (force = false) => {
@@ -49,6 +69,12 @@ const loadOd = async (force = false) => {
   const patients: OdPatient[] = FIXTURE
     ? await loadOdPatientsFromFixture(resolve(FIXTURE))
     : await loadOdPatients(requireDbUrl())
+
+  if (PLAN_CHECK_ENABLED) {
+    odSubs = SUBS_FIXTURE
+      ? await loadActiveDiscountSubsFromFixture(resolve(SUBS_FIXTURE))
+      : await loadActiveDiscountSubs(requireDbUrl())
+  }
 
   odIndex = buildOdIndex(patients)
   odError = undefined
@@ -118,12 +144,19 @@ const toClientRow = (
 
 const buildPayload = (current: Session) => {
   const resolved = resolveRows(current.results, current.decisions, current.duplicateGroups)
+  const checks = checkPlans(resolved, odSubs)
+
   return {
     fileName: current.fileName,
     loadedAt: current.loadedAt,
     odPatientCount: current.odPatientCount,
+    planCheckEnabled: PLAN_CHECK_ENABLED,
     summary: summarize(resolved, current.duplicateGroups),
-    rows: resolved.map((row) => toClientRow(row, current.decisions)),
+    planSummary: PLAN_CHECK_ENABLED ? summarizePlans(checks) : null,
+    rows: resolved.map((row) => ({
+      ...toClientRow(row, current.decisions),
+      plan: PLAN_CHECK_ENABLED ? (checks.byRowNumber.get(row.result.row.rowNumber) ?? null) : null,
+    })),
   }
 }
 
@@ -140,6 +173,8 @@ const handlers: Record<string, (req: IncomingMessage, res: ServerResponse, url: 
       configured: FIXTURE !== undefined || Boolean(process.env.OD_DB_URL),
       odLoaded: odIndex !== undefined,
       odPatientCount: odIndex?.patients.length ?? 0,
+      planCheckEnabled: PLAN_CHECK_ENABLED,
+      activeSubCount: odSubs.byPatNum.size,
       odError,
       hasSession: session !== undefined,
     })
@@ -198,9 +233,10 @@ const handlers: Record<string, (req: IncomingMessage, res: ServerResponse, url: 
 
     const bucket = url.searchParams.get('bucket') ?? 'review'
     const resolved = resolveRows(session.results, session.decisions, session.duplicateGroups)
+    const checks = checkPlans(resolved, odSubs)
     const records = resolved
       .filter((row) => bucket === 'review' || row.status === bucket)
-      .map(toReviewRecord)
+      .map((row) => toReviewRecord(row, PLAN_CHECK_ENABLED ? checks.byRowNumber.get(row.result.row.rowNumber) : undefined))
 
     const csv = toCsv(records)
     res.writeHead(200, {

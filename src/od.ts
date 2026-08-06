@@ -146,6 +146,93 @@ const toOdPatient = (record: PatientRecord): OdPatient => {
 }
 
 /**
+ * A patient's *current* discount plan.
+ *
+ * Read from `discountplansub`, never from `patient.DiscountPlanNum` — that column is zero
+ * for every patient in this install, so a report built on it would call the entire
+ * practice unenrolled while looking like a clean run.
+ */
+export type ActiveSub = {
+  patNum: number
+  discountPlanNum: number
+  description: string
+  /** `''` when the row carries OD's `0001-01-01` zero-date sentinel. */
+  dateEffective: string
+}
+
+export type ActiveSubs = {
+  byPatNum: Map<number, ActiveSub>
+  /**
+   * Patients carrying more than one active sub. None exist today, which is what makes
+   * "current plan" unambiguous — so if one ever appears it is a data change worth seeing,
+   * not something to resolve by silently keeping whichever row came back first.
+   */
+  multipleActive: number[]
+}
+
+/**
+ * The second and last statement this tool runs against OD, and it is still a SELECT.
+ *
+ * It cannot be folded into the patient query: patients accumulate subscription rows over
+ * time, so joining would multiply patient rows and break the matcher's one-row-per-patient
+ * index. The `discountplan` join is one-to-one and only supplies the description.
+ *
+ * `DateTerm = '0001-01-01'` is OD's zero-date sentinel, not NULL — "still active".
+ */
+const ACTIVE_SUB_QUERY = `
+  SELECT s.PatNum, s.DiscountPlanNum, s.DateEffective, p.Description
+  FROM discountplansub s
+  LEFT JOIN discountplan p ON p.DiscountPlanNum = s.DiscountPlanNum
+  WHERE s.DateTerm = '0001-01-01'
+`
+
+type SubRecord = {
+  PatNum: number
+  DiscountPlanNum: number
+  DateEffective: string | Date | null
+  Description: string | null
+}
+
+export const loadActiveDiscountSubs = async (connectionUrl: string) => {
+  const connection = await mysql.createConnection({ uri: connectionUrl, dateStrings: true })
+
+  try {
+    const [rows] = await connection.query<mysql.RowDataPacket[]>(ACTIVE_SUB_QUERY)
+    return indexActiveSubs(rows as unknown as SubRecord[])
+  } finally {
+    await connection.end()
+  }
+}
+
+/** Offline substitute, shaped exactly like the SELECT above. */
+export const loadActiveDiscountSubsFromFixture = async (path: string) => {
+  const raw: unknown = JSON.parse(await readFile(path, 'utf8'))
+  if (!Array.isArray(raw)) throw new Error(`Fixture ${path} must be a JSON array of discountplansub rows.`)
+  return indexActiveSubs(raw as SubRecord[])
+}
+
+const indexActiveSubs = (records: SubRecord[]): ActiveSubs => {
+  const byPatNum = new Map<number, ActiveSub>()
+  const multipleActive: number[] = []
+
+  for (const record of records) {
+    const patNum = Number(record.PatNum)
+    if (byPatNum.has(patNum)) {
+      if (!multipleActive.includes(patNum)) multipleActive.push(patNum)
+      continue
+    }
+    byPatNum.set(patNum, {
+      patNum,
+      discountPlanNum: Number(record.DiscountPlanNum),
+      description: (record.Description ?? '').trim(),
+      dateEffective: normalizeDob(record.DateEffective),
+    })
+  }
+
+  return { byPatNum, multipleActive }
+}
+
+/**
  * Blocking indexes. A CSV row is only ever scored against patients that share at
  * least one hard signal (DOB / email / phone / a name token), which is both the
  * fast path and the honest one — a row sharing nothing is genuinely not found.

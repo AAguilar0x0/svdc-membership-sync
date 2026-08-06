@@ -5,8 +5,16 @@ import 'dotenv/config'
 
 import { readMemberCsv } from './csv.ts'
 import { matchRow } from './match.ts'
-import { buildOdIndex, loadOdPatients, loadOdPatientsFromFixture } from './od.ts'
-import { summarize, writeReport, type ResolvedRow } from './report.ts'
+import {
+  buildOdIndex,
+  loadActiveDiscountSubs,
+  loadActiveDiscountSubsFromFixture,
+  loadOdPatients,
+  loadOdPatientsFromFixture,
+  type ActiveSubs,
+} from './od.ts'
+import { PLAN_VERDICT_LABELS, type PlanVerdict } from './plans.ts'
+import { checkPlans, summarize, summarizePlans, writeReport, type ResolvedRow } from './report.ts'
 
 /**
  * Give every row of the membership CSV an Open Dental PatNum.
@@ -20,6 +28,7 @@ const main = async () => {
     options: {
       out: { type: 'string', default: 'out' },
       fixture: { type: 'string' },
+      'subs-fixture': { type: 'string' },
       'include-deleted': { type: 'boolean', default: false },
       'active-only': { type: 'boolean', default: false },
       help: { type: 'boolean', short: 'h', default: false },
@@ -58,13 +67,25 @@ const main = async () => {
       : await loadOdPatientsFromFixture(resolve(values.fixture))
   console.log(`Loaded ${patients.length} OD patient record(s).`)
 
+  // Against a patient fixture with no subscription fixture the plan check goes dark rather
+  // than reporting every member as unenrolled, which is a wrong answer that looks right.
+  const planCheckEnabled = values.fixture === undefined || values['subs-fixture'] !== undefined
+  const subs: ActiveSubs = !planCheckEnabled
+    ? { byPatNum: new Map(), multipleActive: [] }
+    : values['subs-fixture'] === undefined
+      ? await loadActiveDiscountSubs(odDbUrl!)
+      : await loadActiveDiscountSubsFromFixture(resolve(values['subs-fixture']))
+
+  if (planCheckEnabled) console.log(`Loaded ${subs.byPatNum.size} active discount subscription(s).`)
+
   // Match, then report — nothing is persisted anywhere
   const index = buildOdIndex(patients)
   const results = rows.map((row) => matchRow(row, index))
 
   const outDir = resolve(values.out)
-  const { resolved, duplicateGroups } = writeReport(results, outDir)
+  const { resolved, duplicateGroups, checks } = writeReport(results, outDir, new Map(), subs, planCheckEnabled)
   printSummary(resolved, duplicateGroups, patients.length, outDir)
+  if (checks) printPlanSummary(checks)
 }
 
 const printUsage = () => {
@@ -77,6 +98,10 @@ Options
   --out <dir>          where to write the report (default: out)
   --fixture <file>     match against a JSON patient fixture instead of the DB
                        (offline dry run — see sample/od-patients.sample.json)
+  --subs-fixture <f>   discountplansub fixture to run the plan check offline
+                       (see sample/od-discount-subs.sample.json). Against the DB the
+                       plan check always runs; with --fixture and no subs it goes dark
+                       rather than reporting every member as unenrolled.
   --active-only        only process rows whose Active column is truthy
   --include-deleted    also consider OD patients with PatStatus = Deleted
   -h, --help           show this
@@ -120,6 +145,38 @@ const printSummary = (
   the patient list are maintained separately, so surfacing that gap is part of the
   point. Nothing has been written to Open Dental. Review these files before enrolling.
 `)
+}
+
+/**
+ * The plan check, read-only. `correct` means no action — we do not touch effective dates
+ * on people who are already right — and everything that is not a clean instruction is
+ * listed separately, so the actionable number is never inflated by rows nobody has read.
+ */
+const printPlanSummary = (checks: ReturnType<typeof checkPlans>) => {
+  const summary = summarizePlans(checks)
+  const line = (verdict: PlanVerdict) => `  ${PLAN_VERDICT_LABELS[verdict].padEnd(18)}${summary[verdict]}`
+
+  console.log(`── Discount plan check ──────────────────────────
+${line('correct')}
+${line('wrong_plan')}
+${line('no_sub')}
+
+  needs a human
+${line('unmapped_od_plan')}
+${line('conflict')}
+${line('unknown_csv_plan')}
+${line('ineligible')}
+
+  actionable          ${summary.actionable}  (wrong plan + no sub, conflicts excluded)`)
+
+  if (summary.unknownPlanStrings.length > 0) {
+    console.log(`
+  ⚠ ${summary.unknownPlanStrings.length} plan string(s) not in the mapping table — these rows
+    cannot be checked, and the table needs updating before this run means anything:`)
+    for (const value of summary.unknownPlanStrings) console.log(`    "${value}"`)
+  }
+
+  console.log('\n  Read-only. Nothing about a plan has been written to Open Dental.\n')
 }
 
 main().catch((error: unknown) => {

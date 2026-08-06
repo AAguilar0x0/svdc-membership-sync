@@ -1,0 +1,5 @@
+Patient Name,DOB,Email,Phone,Plan Start Date,Plan,Add-ons,Active
+Stella Aguirre,3/14/1978,stella.aguirre@example.com,(831) 555-0142,1/15/2026,12 Month- Platinum,,Yes
+Katherine O'Brien,8/21/1982,,831.555.0199,1/15/2026,6 Month- Adult,,Yes
+Katherine OBrien,8/21/1982,,(831) 555-0199,2/1/2026,3 Month- Perio,Fluoride,Yes
+Michael Torres,6/6/1970,mtorres@example.com,8315550164,1/15/2026,3 Month- Perio,Fluoride,Yes

@@ -43,6 +43,7 @@ pnpm match ./members.csv --out reports --active-only
 | `--active-only` | skip rows whose `Active` column is falsy |
 | `--include-deleted` | also consider OD patients with `PatStatus = Deleted` (excluded by default) |
 | `--fixture <file>` | match against a JSON patient fixture instead of the DB — offline dry run |
+| `--subs-fixture <file>` | `discountplansub` fixture, so the plan check runs offline too |
 
 ## The review UI
 
@@ -167,6 +168,64 @@ Candidates are blocked on the hard signals — a patient is only scored if it sh
 DOB, email, phone or name token with the row — so a row sharing nothing is genuinely
 not found rather than force-fitted to the nearest string.
 
+## The discount-plan check
+
+For every member matched to a PatNum, the report also says whether they are **already on
+the right discount plan**. Read-only — `correct` means *no action*, and effective dates on
+people who are already right are never touched. Design notes and the write-phase questions
+are in [`docs/discount-plan-verification.md`](docs/discount-plan-verification.md).
+
+The current plan comes from **`discountplansub`**, not `patient.DiscountPlanNum` — that
+column is zero for every patient in this install, so a report built on it would call the
+whole practice unenrolled while looking like a clean run. It is a second `SELECT`, loaded
+into a map keyed by PatNum; joining it into the patient query would multiply patient rows
+and break the matcher.
+
+The CSV's `Plan` and `Add-ons` columns *together* pick one plan — `Add-ons` is not a
+separate axis, and the 3-month / 6-month prefix does not affect which plan is correct:
+
+| CSV `Plan` + `Add-ons` | Plan |
+| --- | --- |
+| `6 Month- Adult` | 1 · In Office Plan |
+| `6 Month- Adult` + `Fluoride` | 2 · In Office Plan w/Fluoride |
+| `3 Month- Perio` | 3 · In Office Plan Perio |
+| `3 Month- Perio` + `Fluoride` | 5 · In Office Plan Perio W/ Fluoride |
+
+**These strings are from the sample export and are not yet confirmed against the real
+one.** An unrecognised combination is never resolved to a default — the row is reported as
+`unknown_csv_plan` and the page shows a red banner naming the strings, because a silent
+fallthrough would report "correct" for members nobody has actually checked.
+
+| Verdict | Meaning |
+| --- | --- |
+| `correct` | already right — **no action** |
+| `wrong_plan` | on a different mapped plan |
+| `no_sub` | matched patient with no active subscription |
+| `unmapped_od_plan` | on a plan outside the table (4, 6, 7…) — human review, raw number shown |
+| `unknown_csv_plan` | CSV plan string we do not recognise |
+| `conflict` | two CSV rows disagree about one patient, or the patient has two active subs |
+| `ineligible` | never matched — no PatNum to act on, and **not** counted as correct |
+
+Only `wrong_plan` and `no_sub` are counted as **actionable**. Conflicts are held back
+rather than resolved: the export repeats people, and two rows for one patient that
+disagree about the plan are a question for a human, not two API calls.
+
+Against the database the check always runs. Against a patient fixture it needs
+`--subs-fixture` / `OD_SUBS_FIXTURE` too — without one it goes dark rather than reporting
+every member as unenrolled:
+
+```sh
+pnpm match sample/members.sample.csv \
+  --fixture sample/od-patients.sample.json \
+  --subs-fixture sample/od-discount-subs.sample.json
+
+# the buckets that the main sample does not reach — an unknown plan string,
+# and two rows for one patient asking for different plans
+pnpm match sample/members.plan-edge.sample.csv \
+  --fixture sample/od-patients.sample.json \
+  --subs-fixture sample/od-discount-subs.sample.json
+```
+
 ### Expect a sizeable not-found bucket
 
 The membership roster and the patient list are maintained separately, so they are not
@@ -175,8 +234,9 @@ treat it as a bug in the matcher.
 
 ## Safety
 
-- One statement runs against OD: `SELECT … FROM patient WHERE PatStatus <> 4`.
-  Use a SELECT-only MySQL user if one exists.
+- Two statements run against OD, both `SELECT`: one over `patient`, one over
+  `discountplansub` joined to `discountplan` for the description. Use a SELECT-only MySQL
+  user if one exists.
 - `DATE` columns are read as strings (`dateStrings: true`) so the driver's local-timezone
   conversion cannot shift a birthdate by a day.
 - The member export and the report are PHI. `.gitignore` covers `out/`, `data/` and

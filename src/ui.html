@@ -134,6 +134,7 @@
   <div id="results" hidden>
     <div class="tiles" id="tiles"></div>
     <div id="collisions" class="note warn" hidden></div>
+    <div id="planwarn" class="note err" hidden></div>
     <div class="note info">
       A sizeable <strong>not found</strong> bucket is expected — the membership roster and the
       patient list are maintained separately. Surfacing that gap is part of the point, not a matcher bug.
@@ -155,6 +156,7 @@
           <th class="hide-sm">DOB</th>
           <th class="hide-sm">Contact</th>
           <th class="hide-sm">Plan</th>
+          <th>Plan check</th>
           <th>Status</th>
           <th>Open Dental match</th>
           <th>Chart status</th>
@@ -229,6 +231,16 @@ const decide = async (rowNumber, patNum) => {
 
 const LABELS = { all: 'All', matched: 'Matched', ambiguous: 'Ambiguous', not_found: 'Not found', review: 'Needs review' }
 
+const PLAN_LABELS = {
+  correct: 'Correct', wrong_plan: 'Wrong plan', no_sub: 'No sub', unmapped_od_plan: 'Unmapped plan',
+  unknown_csv_plan: 'Unknown CSV plan', conflict: 'Conflict', ineligible: 'Not matched',
+}
+/** Only 'correct' is good news; 'wrong plan' and 'no sub' are work; the rest need a human. */
+const PLAN_BADGE = {
+  correct: 'matched', wrong_plan: 'not_found', no_sub: 'not_found', unmapped_od_plan: 'ambiguous',
+  unknown_csv_plan: 'ambiguous', conflict: 'ambiguous', ineligible: 'dup',
+}
+
 const visibleRows = () => {
   const rows = state.rows.filter((row) => {
     if (filter === 'all') return true
@@ -250,9 +262,31 @@ const renderTiles = () => {
     ['', 'Distinct PatNums', s.distinctPatients], ['', 'Duplicate rows', s.duplicateRows],
     ['', 'Reviewed by hand', s.reviewed],
   ]
+  // Plan tiles sit alongside the match tiles rather than in their own block: the question
+  // "how many are already right?" is only meaningful next to "how many did we even match?".
+  const plan = state.planSummary
+  if (plan) {
+    tiles.push(
+      ['matched', 'Plan correct', plan.correct],
+      ['not_found', 'Wrong plan', plan.wrong_plan],
+      ['not_found', 'No sub', plan.no_sub],
+      ['ambiguous', 'Plan needs review', plan.unmapped_od_plan + plan.conflict + plan.unknown_csv_plan],
+    )
+  }
+
   $('tiles').innerHTML = tiles
     .map(([cls, label, n]) => `<div class="tile ${cls}"><div class="n">${n}</div><div class="l">${label}</div></div>`)
     .join('')
+
+  // An unrecognised plan string is not a row-level curiosity: it means the mapping table is
+  // incomplete, so those members cannot be checked at all. Said loudly, in red.
+  const unknown = plan?.unknownPlanStrings ?? []
+  $('planwarn').hidden = unknown.length === 0
+  if (unknown.length) {
+    $('planwarn').innerHTML = `<strong>${unknown.length} plan string(s) are not in the mapping table</strong>`
+      + ' — those members cannot be checked until it is updated: '
+      + unknown.map((value) => `<code>${esc(value)}</code>`).join(', ')
+  }
 
   const collisions = state.summary.collidingPatNums
   $('collisions').hidden = collisions.length === 0
@@ -287,6 +321,23 @@ const candidateHtml = (row, candidate) => {
 }
 
 /**
+ * The plan the CSV asks for against the plan OD actually has. Read-only — `correct` means
+ * no action, and nothing here is an instruction to write anything.
+ */
+const planCellHtml = (row) => {
+  const check = row.plan
+  if (!check) return '<span class="muted">—</span>'
+
+  const od = check.odPlanNum == null
+    ? 'no active sub'
+    : `OD plan ${check.odPlanNum}${check.odPlanDescription ? ` · ${check.odPlanDescription}` : ''}`
+
+  return `<span class="badge ${PLAN_BADGE[check.verdict] ?? 'dup'}">${esc(PLAN_LABELS[check.verdict] ?? check.verdict)}</span>
+    <br /><span class="muted tiny">${esc(od)}</span>
+    ${check.note ? `<br /><span class="muted tiny">${esc(check.note)}</span>` : ''}`
+}
+
+/**
  * OD chart status. When the row matched, it is the matched patient's. When it did not,
  * it falls back to the top candidate's, dimmed — so "this row failed because the chart
  * is archived" is visible without opening the candidate list. Anything but Patient is flagged.
@@ -313,6 +364,7 @@ const rowHtml = (row) => {
     <td class="hide-sm">${contact || '<span class="muted">—</span>'}</td>
     <td class="hide-sm">${esc(row.csv.plan)}${row.csv.addOns ? `<br /><span class="muted">+ ${esc(row.csv.addOns)}</span>` : ''}
       <br /><span class="muted">${esc(row.csv.active)}</span></td>
+    <td>${planCellHtml(row)}</td>
     <td><span class="badge ${row.status}">${LABELS[row.status] ?? row.status}</span>
       ${row.resolvedBy === 'human' ? '<span class="badge human">by hand</span>' : ''}
       <br /><span class="muted">${esc(row.verdict)}</span></td>
@@ -327,7 +379,7 @@ const rowHtml = (row) => {
 
   if (!isOpen) return main
 
-  return main + `<tr><td></td><td colspan="8"><div class="cands">
+  return main + `<tr><td></td><td colspan="9"><div class="cands">
     ${row.candidates.map((candidate) => candidateHtml(row, candidate)).join('')}
     <div style="display:flex;gap:.5rem;margin-top:.4rem">
       <button data-confirm="${row.rowNumber}" data-patnum="none">None of these</button>
@@ -343,7 +395,7 @@ const render = () => {
   const rows = visibleRows()
   $('tbody').innerHTML = rows.length
     ? rows.map(rowHtml).join('')
-    : '<tr><td colspan="9" class="muted" style="padding:1.5rem;text-align:center">No rows match this filter.</td></tr>'
+    : '<tr><td colspan="10" class="muted" style="padding:1.5rem;text-align:center">No rows match this filter.</td></tr>'
   $('foot').textContent =
     `${state.fileName} · ${rows.length} of ${state.rows.length} rows shown · matched against ${state.odPatientCount} OD patients.`
       + ' Exports reflect your decisions. Nothing has been written to Open Dental.'

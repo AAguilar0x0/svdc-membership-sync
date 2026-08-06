@@ -4,6 +4,8 @@ import { stringify } from 'csv-stringify/sync'
 
 import { duplicateKey, type MemberRow } from './csv.ts'
 import type { Candidate, MatchResult, MatchStatus } from './match.ts'
+import type { ActiveSubs } from './od.ts'
+import { classifyPlan, isActionablePlanVerdict, mapCsvPlan, type PlanCheck, type PlanVerdict } from './plans.ts'
 
 /**
  * Output is a reviewable three-way split, never a silent best guess: `review.csv`
@@ -70,7 +72,98 @@ export const resolveRows = (
     }
   })
 
-export const toReviewRecord = (row: ResolvedRow) => {
+export type PlanChecks = {
+  byRowNumber: Map<number, PlanCheck>
+  /** Distinct CSV plan strings the mapping table does not cover — the thing to fix, loudly. */
+  unknownPlanStrings: string[]
+}
+
+/**
+ * Compare each matched patient's active subscription against the plan the CSV says they
+ * should be on.
+ *
+ * Two passes, because the second one cannot be done a row at a time: the export repeats
+ * people, and two rows for one patient that disagree about the plan are a conflict, not
+ * two instructions. Same for two different members matched to a single PatNum. Neither is
+ * *resolved* here — at this stage they are pulled out of the actionable count and handed
+ * to a human, which is the honest outcome for a spreadsheet that contradicts itself.
+ */
+export const checkPlans = (resolved: ResolvedRow[], subs: ActiveSubs): PlanChecks => {
+  const byRowNumber = new Map<number, PlanCheck>()
+  const unknownPlanStrings = new Set<string>()
+
+  for (const row of resolved) {
+    const csvPlan = mapCsvPlan(row.result.row)
+    const patNum = row.chosen?.patient.patNum
+
+    // Collected for every row, matched or not: an unrecognised string means the mapping
+    // table is incomplete, and that is true whether or not this particular row matched.
+    if (csvPlan === undefined) {
+      const { plan, addOns } = row.result.row.raw
+      unknownPlanStrings.add(addOns === '' ? plan : `${plan} + ${addOns}`)
+    }
+
+    const check = classifyPlan(csvPlan, patNum, patNum === undefined ? undefined : subs.byPatNum.get(patNum))
+
+    byRowNumber.set(
+      row.result.row.rowNumber,
+      patNum !== undefined && subs.multipleActive.includes(patNum)
+        ? { ...check, verdict: 'conflict', note: 'patient has more than one active subscription' }
+        : check,
+    )
+  }
+
+  for (const [patNum, rows] of groupByPatNum(resolved)) {
+    if (rows.length < 2) continue
+    const intents = new Set(rows.map((row) => byRowNumber.get(row.result.row.rowNumber)?.csvPlanNum))
+    if (intents.size < 2) continue
+
+    for (const row of rows) {
+      const check = byRowNumber.get(row.result.row.rowNumber)
+      if (check === undefined) continue
+      byRowNumber.set(row.result.row.rowNumber, {
+        ...check,
+        verdict: 'conflict',
+        note: `${rows.length} CSV rows disagree about patient ${patNum}`,
+      })
+    }
+  }
+
+  return { byRowNumber, unknownPlanStrings: [...unknownPlanStrings] }
+}
+
+const groupByPatNum = (resolved: ResolvedRow[]) => {
+  const groups = new Map<number, ResolvedRow[]>()
+  for (const row of resolved) {
+    const patNum = row.chosen?.patient.patNum
+    if (patNum === undefined) continue
+    const existing = groups.get(patNum)
+    if (existing) existing.push(row)
+    else groups.set(patNum, [row])
+  }
+  return groups
+}
+
+export const summarizePlans = (checks: PlanChecks) => {
+  const counts: Record<PlanVerdict, number> = {
+    correct: 0,
+    wrong_plan: 0,
+    no_sub: 0,
+    unmapped_od_plan: 0,
+    unknown_csv_plan: 0,
+    conflict: 0,
+    ineligible: 0,
+  }
+  for (const check of checks.byRowNumber.values()) counts[check.verdict] += 1
+
+  return {
+    ...counts,
+    actionable: [...checks.byRowNumber.values()].filter((check) => isActionablePlanVerdict(check.verdict)).length,
+    unknownPlanStrings: checks.unknownPlanStrings,
+  }
+}
+
+export const toReviewRecord = (row: ResolvedRow, check?: PlanCheck) => {
   const { result, chosen } = row
   const [best, second, third] = result.candidates
 
@@ -95,6 +188,12 @@ export const toReviewRecord = (row: ResolvedRow) => {
     Plan: result.row.raw.plan,
     'Add-ons': result.row.raw.addOns,
     Active: result.row.raw.active,
+    'Plan Verdict': check?.verdict ?? '',
+    'Plan Note': check?.note ?? '',
+    'CSV Plan Num': check?.csvPlanNum ?? '',
+    'OD Plan Num': check?.odPlanNum ?? '',
+    'OD Plan': check?.odPlanDescription ?? '',
+    'OD Plan Effective': check?.odEffectiveDate ?? '',
     'Candidate 1': describeCandidate(best),
     'Candidate 2': describeCandidate(second),
     'Candidate 3': describeCandidate(third),
@@ -104,12 +203,19 @@ export const toReviewRecord = (row: ResolvedRow) => {
 
 export const toCsv = (records: Record<string, unknown>[]) => stringify(records, { header: true })
 
-export const writeReport = (results: MatchResult[], outDir: string, decisions: Decisions = new Map()) => {
+export const writeReport = (
+  results: MatchResult[],
+  outDir: string,
+  decisions: Decisions = new Map(),
+  subs?: ActiveSubs,
+  planCheckEnabled = false,
+) => {
   mkdirSync(outDir, { recursive: true })
 
   const duplicateGroups = groupDuplicates(results.map((result) => result.row))
   const resolved = resolveRows(results, decisions, duplicateGroups)
-  const records = resolved.map(toReviewRecord)
+  const checks = planCheckEnabled && subs ? checkPlans(resolved, subs) : undefined
+  const records = resolved.map((row) => toReviewRecord(row, checks?.byRowNumber.get(row.result.row.rowNumber)))
 
   const write = (name: string, rows: Record<string, unknown>[]) =>
     writeFileSync(join(outDir, name), toCsv(rows))
@@ -119,7 +225,7 @@ export const writeReport = (results: MatchResult[], outDir: string, decisions: D
   write('ambiguous.csv', records.filter((record) => record.Status === 'ambiguous'))
   write('not-found.csv', records.filter((record) => record.Status === 'not_found'))
 
-  return { records, resolved, duplicateGroups }
+  return { records, resolved, duplicateGroups, checks }
 }
 
 /**

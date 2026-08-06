@@ -1,0 +1,12 @@
+[
+  { "PatNum": 101, "DiscountPlanNum": 1, "DateEffective": "2025-01-15", "Description": "In Office Plan" },
+  { "PatNum": 102, "DiscountPlanNum": 3, "DateEffective": "2025-03-01", "Description": "In Office Plan Perio" },
+  { "PatNum": 104, "DiscountPlanNum": 2, "DateEffective": "0001-01-01", "Description": "In Office Plan w/Fluoride" },
+  { "PatNum": 105, "DiscountPlanNum": 7, "DateEffective": "2024-11-02", "Description": "Employee Benefits" },
+  { "PatNum": 106, "DiscountPlanNum": 3, "DateEffective": "2025-06-20", "Description": "In Office Plan Perio" },
+  { "PatNum": 107, "DiscountPlanNum": 1, "DateEffective": "2025-02-11", "Description": "In Office Plan" },
+  { "PatNum": 108, "DiscountPlanNum": 5, "DateEffective": "2025-04-04", "Description": "In Office Plan Perio W/ Fluoride" },
+  { "PatNum": 109, "DiscountPlanNum": 1, "DateEffective": "2025-05-09", "Description": "In Office Plan" },
+  { "PatNum": 109, "DiscountPlanNum": 2, "DateEffective": "2025-07-01", "Description": "In Office Plan w/Fluoride" },
+  { "PatNum": 110, "DiscountPlanNum": 2, "DateEffective": "2025-08-18", "Description": "In Office Plan w/Fluoride" }
+]

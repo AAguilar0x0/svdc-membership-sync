@@ -8,7 +8,7 @@ Design detail for the discount-plan work lives in
 
 ## Next
 
-- [ ] Push the three commits on `main` to `origin`.
+- [x] Push the review-hardening and security commits.
 - [ ] **Run the real export through the matcher** (read-only, as-is). One pass answers
       three open questions at once: the real distinct `Plan` / `Add-ons` strings, the true
       matched / ambiguous / not-found split, and whether the Perio mismatch is real.
@@ -32,28 +32,36 @@ Design detail for the discount-plan work lives in
 
 ## Read-only discount-plan report
 
-Buildable now with the mapping table stubbed.
+Built, with the mapping table carrying the unconfirmed sample strings.
 
-- [ ] `loadActiveDiscountSubs()` — separate `SELECT` on `discountplansub`, into a
+- [x] `loadActiveDiscountSubs()` — separate `SELECT` on `discountplansub`, into a
       `Map` keyed by `PatNum`. Never joined into the patient query.
-- [ ] Plan mapping table + `classify(row, activeSub)` returning a bucket.
-- [ ] Plan column in the results table: *CSV says* / *OD has* / verdict badge.
-- [ ] Plan fields on the export record (`OD Plan`, `OD Effective Date`, `Plan Verdict`).
+- [x] Plan mapping table + `classifyPlan()` returning one of seven verdicts.
+- [x] Plan column in the results table: verdict badge, the OD plan, and why.
+- [x] Plan fields on the export record (`Plan Verdict`, `Plan Note`, `CSV Plan Num`,
+      `OD Plan Num`, `OD Plan`, `OD Plan Effective`).
+- [x] An unrecognised CSV plan string is never resolved to a default — the row is
+      `unknown_csv_plan` and the page names the offending strings in a red banner.
+- [x] Unmatched rows are `ineligible`, counted separately from `correct`.
+- [x] Conflicts held back, not resolved: two CSV rows disagreeing about one patient, and
+      patients with more than one active sub, are excluded from the actionable count.
 
-Two things to keep even at PoC grade — each about a line, and each the difference
-between a report that is rough and a report that is quietly wrong:
+Changed my mind on one line below: plan **tiles** went in after all. They are four
+entries in an array the page already builds, and "how many are already right?" is the
+question the whole exercise exists to answer. No filter tab, as planned.
 
-- [ ] An unrecognised CSV plan string is a **hard error**. A silent fallthrough to plan 1
-      reports "correct" for people nobody checked, and looks exactly like a working run.
-- [ ] Unmatched rows counted **separately** from `correct`. That is the headline number
-      everyone will read.
+Still open here:
+
+- [ ] Swap the sample plan strings for the real ones once confirmed — one table in
+      `src/plans.ts`, nothing else moves.
+- [ ] Run it against the real database and eyeball the Perio bucket.
 
 ## Deliberately not doing (PoC)
 
 - No test suite. Verification is the fixture run plus a look at the real export.
 - No conflict *resolution* pass. Duplicate-group plan disagreements and PatNum collisions
   are excluded from the actionable count and shown as needs-review — a filter, not a feature.
-- No dedicated tiles or filter tab for plan buckets; the column and the export are enough.
+- No filter tab for plan buckets; the column, the tiles and the export are enough.
 
 ## Before any write to live OD
 

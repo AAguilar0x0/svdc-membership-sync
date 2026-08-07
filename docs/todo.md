@@ -53,18 +53,22 @@ ship a tool that hard-errors on every row of the real file.
 - [ ] **Ask Matthew to run `pnpm discover` against the real export and send back the output.**
       That is now the entire remaining input needed for the plan mapping, and it contains no PHI.
 
-## Blocked on Matthew
+## Parked — write phase (8/7)
 
-- [ ] **Cancelled memberships** — a row with `Active: No` whose patient is still on a plan
-      in OD. Drop, or no-op? The buckets have nowhere to put it today.
-- [ ] **Drop/add ordering** for the write phase. The docs say
-      `GET /discountplansubs?PatNum=` returns a *single* object, so the API models one sub
-      per patient and an overlap reads back ambiguously — which weakens the add-then-term
-      preference. Needs a real test against a database we are willing to break, not a
-      decision taken from documentation.
+This is a proof of concept and a throwaway, so the write-side questions are not being
+chased. Both are recorded because they are real, not because they are next:
+
+- **Cancelled memberships** — `Active: No` whose patient still holds a plan. No-op writes
+  nothing; drop is one `PUT` setting `DateTerm` on one existing row. Today the report calls
+  these `correct`, which is the one thing that is definitely wrong.
+- **Drop/add ordering** — per patient it is 1 new `discountplansub` row + `DateTerm` on the
+  old one, either order. Term-then-add fails to zero active rows; add-then-term fails to
+  two, and `GET` returns a single object so we cannot tell which. Needs a real test.
 - [x] Term vs delete on drop — agreed: term, to preserve the audit trail.
-- [x] "Null effective date" — answered by the docs: omit the field and it defaults to
-      `0001-01-01`. No longer a question for anyone.
+- [x] "Null effective date" — answered by the docs: omit the field, it defaults to
+      `0001-01-01`.
+
+## Blocked on Matthew
 
 ## Read-only discount-plan report
 

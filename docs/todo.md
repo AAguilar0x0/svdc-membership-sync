@@ -68,8 +68,6 @@ chased. Both are recorded because they are real, not because they are next:
 - [x] "Null effective date" — answered by the docs: omit the field, it defaults to
       `0001-01-01`.
 
-## Blocked on Matthew
-
 ## Read-only discount-plan report
 
 Built, with the mapping table carrying the unconfirmed sample strings.
@@ -92,8 +90,8 @@ question the whole exercise exists to answer. No filter tab, as planned.
 
 Still open here:
 
-- [ ] Swap the sample plan strings for the real ones once confirmed — one table in
-      `src/plans.ts`, nothing else moves.
+- [ ] Swap the sample plan strings for the real ones once confirmed — edit
+      `plans.config.json` and flip `"confirmed"` to `true`. No code change, no commit needed.
 - [ ] Run it against the real database and eyeball the Perio bucket.
 
 ## Deliberately not doing (PoC)

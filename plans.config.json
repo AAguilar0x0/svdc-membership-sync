@@ -1,0 +1,10 @@
+{
+  "confirmed": false,
+  "note": "UNCONFIRMED. These Plan / Add-ons strings come from the sample export, not the real one. Run `pnpm discover <members.csv>` against the real file to list its actual distinct values and the plan numbers in OD, then correct this file. Nothing here is compiled in — editing this file is the whole edit.",
+  "plans": [
+    { "plan": "6 Month- Adult", "addOns": "", "discountPlanNum": 1, "description": "In Office Plan" },
+    { "plan": "6 Month- Adult", "addOns": "Fluoride", "discountPlanNum": 2, "description": "In Office Plan w/Fluoride" },
+    { "plan": "3 Month- Perio", "addOns": "", "discountPlanNum": 3, "description": "In Office Plan Perio" },
+    { "plan": "3 Month- Perio", "addOns": "Fluoride", "discountPlanNum": 5, "description": "In Office Plan Perio W/ Fluoride" }
+  ]
+}

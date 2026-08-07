@@ -1,6 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { readFile } from 'node:fs/promises'
-import { resolve } from 'node:path'
+import { relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import 'dotenv/config'
 
@@ -18,6 +18,7 @@ import {
   type OdIndex,
   type OdPatient,
 } from './od.ts'
+import { DEFAULT_PLAN_MAP_PATH, loadPlanMap, type PlanMap } from './plans.ts'
 import {
   checkPlans,
   groupDuplicates,
@@ -49,6 +50,15 @@ const UI_PATH = fileURLToPath(new URL('./ui.html', import.meta.url))
  * on file, which is a wrong answer wearing the clothes of a real one. So it goes dark instead.
  */
 const PLAN_CHECK_ENABLED = FIXTURE === undefined || SUBS_FIXTURE !== undefined
+
+/**
+ * Loaded once at startup so a broken mapping fails the process rather than every request,
+ * and read from a file rather than compiled in — the person who can see the real export is
+ * not the person who can push a commit.
+ */
+const PLAN_MAP: PlanMap | undefined = PLAN_CHECK_ENABLED
+  ? loadPlanMap(resolve(process.env.PLAN_MAP_FILE ?? DEFAULT_PLAN_MAP_PATH))
+  : undefined
 
 /** In-memory only — nothing about a run is persisted to disk unless the user exports. */
 type Session = {
@@ -158,7 +168,7 @@ const toClientRow = (
 
 const buildPayload = (current: Session) => {
   const resolved = resolveRows(current.results, current.decisions, current.duplicateGroups)
-  const checks = checkPlans(resolved, odSubs)
+  const checks = PLAN_MAP && checkPlans(resolved, odSubs, PLAN_MAP)
 
   return {
     fileName: current.fileName,
@@ -168,10 +178,13 @@ const buildPayload = (current: Session) => {
     activeChartsOnly: activeChartsFilter,
     inactiveChartCount: odPatients.length - activeChartsOnly(odPatients).length,
     summary: summarize(resolved, current.duplicateGroups),
-    planSummary: PLAN_CHECK_ENABLED ? summarizePlans(checks) : null,
+    planSummary: checks ? summarizePlans(checks) : null,
+    planMapConfirmed: PLAN_MAP?.confirmed ?? null,
+    // Relative, because the page names a file the operator has to go and edit.
+    planMapSource: PLAN_MAP ? relative(process.cwd(), PLAN_MAP.source) : null,
     rows: resolved.map((row) => ({
       ...toClientRow(row, current.decisions),
-      plan: PLAN_CHECK_ENABLED ? (checks.byRowNumber.get(row.result.row.rowNumber) ?? null) : null,
+      plan: checks?.byRowNumber.get(row.result.row.rowNumber) ?? null,
     })),
   }
 }
@@ -270,10 +283,10 @@ const handlers: Record<string, (req: IncomingMessage, res: ServerResponse, url: 
 
     const bucket = url.searchParams.get('bucket') ?? 'review'
     const resolved = resolveRows(session.results, session.decisions, session.duplicateGroups)
-    const checks = checkPlans(resolved, odSubs)
+    const checks = PLAN_MAP && checkPlans(resolved, odSubs, PLAN_MAP)
     const records = resolved
       .filter((row) => bucket === 'review' || row.status === bucket)
-      .map((row) => toReviewRecord(row, PLAN_CHECK_ENABLED ? checks.byRowNumber.get(row.result.row.rowNumber) : undefined))
+      .map((row) => toReviewRecord(row, checks?.byRowNumber.get(row.result.row.rowNumber)))
 
     const csv = toCsv(records)
     res.writeHead(200, {

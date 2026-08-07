@@ -14,7 +14,7 @@ import {
   loadOdPatientsFromFixture,
   type ActiveSubs,
 } from './od.ts'
-import { PLAN_VERDICT_LABELS, type PlanVerdict } from './plans.ts'
+import { DEFAULT_PLAN_MAP_PATH, loadPlanMap, PLAN_VERDICT_LABELS, type PlanMap, type PlanVerdict } from './plans.ts'
 import { checkPlans, summarize, summarizePlans, writeReport, type ResolvedRow } from './report.ts'
 
 /**
@@ -33,6 +33,7 @@ const main = async () => {
       'include-deleted': { type: 'boolean', default: false },
       'active-only': { type: 'boolean', default: false },
       'active-charts-only': { type: 'boolean', default: false },
+      'plan-map': { type: 'string', default: DEFAULT_PLAN_MAP_PATH },
       help: { type: 'boolean', short: 'h', default: false },
     },
   })
@@ -72,13 +73,19 @@ const main = async () => {
   // Against a patient fixture with no subscription fixture the plan check goes dark rather
   // than reporting every member as unenrolled, which is a wrong answer that looks right.
   const planCheckEnabled = values.fixture === undefined || values['subs-fixture'] !== undefined
-  const subs: ActiveSubs = !planCheckEnabled
-    ? { byPatNum: new Map(), multipleActive: [] }
+  const subs: ActiveSubs | undefined = !planCheckEnabled
+    ? undefined
     : values['subs-fixture'] === undefined
       ? await loadActiveDiscountSubs(odDbUrl!)
       : await loadActiveDiscountSubsFromFixture(resolve(values['subs-fixture']))
 
-  if (planCheckEnabled) console.log(`Loaded ${subs.byPatNum.size} active discount subscription(s).`)
+  const planMap: PlanMap | undefined = subs && loadPlanMap(resolve(values['plan-map']))
+  if (subs && planMap) {
+    console.log(
+      `Loaded ${subs.byPatNum.size} active discount subscription(s) and ${planMap.entries.length} plan mapping(s)` +
+        `${planMap.confirmed ? '' : ' (mapping is marked UNCONFIRMED)'}.`,
+    )
+  }
 
   // Match twice — every chart, and active charts only. Both are cheap, and the question
   // asked of this tool is not "which is right" but "how much difference does it make",
@@ -93,9 +100,9 @@ const main = async () => {
   const results = values['active-charts-only'] ? activeResults : allResults
 
   const outDir = resolve(values.out)
-  const { resolved, duplicateGroups, checks } = writeReport(results, outDir, new Map(), subs, planCheckEnabled)
+  const { resolved, duplicateGroups, checks } = writeReport(results, outDir, new Map(), subs, planMap)
   printSummary(resolved, duplicateGroups, patients.length, outDir)
-  if (checks) printPlanSummary(checks)
+  if (checks && planMap) printPlanSummary(checks, planMap)
 }
 
 const printUsage = () => {
@@ -198,7 +205,7 @@ ${line('not_found', 'not found')}
  * on people who are already right — and everything that is not a clean instruction is
  * listed separately, so the actionable number is never inflated by rows nobody has read.
  */
-const printPlanSummary = (checks: ReturnType<typeof checkPlans>) => {
+const printPlanSummary = (checks: ReturnType<typeof checkPlans>, planMap: PlanMap) => {
   const summary = summarizePlans(checks)
   const line = (verdict: PlanVerdict) => `  ${PLAN_VERDICT_LABELS[verdict].padEnd(18)}${summary[verdict]}`
 
@@ -217,9 +224,14 @@ ${line('ineligible')}
 
   if (summary.unknownPlanStrings.length > 0) {
     console.log(`
-  ⚠ ${summary.unknownPlanStrings.length} plan string(s) not in the mapping table — these rows
-    cannot be checked, and the table needs updating before this run means anything:`)
+  ⚠ ${summary.unknownPlanStrings.length} plan string(s) are not in ${planMap.source} — those rows
+    cannot be checked, and the mapping needs correcting before this run means anything:`)
     for (const value of summary.unknownPlanStrings) console.log(`    "${value}"`)
+    console.log('    Run `pnpm discover <members.csv>` to list every combination with counts.')
+  } else if (!planMap.confirmed) {
+    console.log(`
+  ⚠ every plan string mapped, but ${planMap.source} is still marked "confirmed": false —
+    nobody has checked these values against a real export. Set it to true once someone has.`)
   }
 
   console.log('\n  Read-only. Nothing about a plan has been written to Open Dental.\n')

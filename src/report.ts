@@ -5,7 +5,15 @@ import { stringify } from 'csv-stringify/sync'
 import { duplicateKey, type MemberRow } from './csv.ts'
 import type { Candidate, MatchResult, MatchStatus } from './match.ts'
 import type { ActiveSubs } from './od.ts'
-import { classifyPlan, isActionablePlanVerdict, mapCsvPlan, type PlanCheck, type PlanVerdict } from './plans.ts'
+import {
+  classifyPlan,
+  isActionablePlanVerdict,
+  mapCsvPlan,
+  mappedPlanNumbers,
+  type PlanCheck,
+  type PlanMap,
+  type PlanVerdict,
+} from './plans.ts'
 
 /**
  * Output is a reviewable three-way split, never a silent best guess: `review.csv`
@@ -88,12 +96,13 @@ export type PlanChecks = {
  * *resolved* here — at this stage they are pulled out of the actionable count and handed
  * to a human, which is the honest outcome for a spreadsheet that contradicts itself.
  */
-export const checkPlans = (resolved: ResolvedRow[], subs: ActiveSubs): PlanChecks => {
+export const checkPlans = (resolved: ResolvedRow[], subs: ActiveSubs, planMap: PlanMap): PlanChecks => {
   const byRowNumber = new Map<number, PlanCheck>()
   const unknownPlanStrings = new Set<string>()
+  const mappedPlans = mappedPlanNumbers(planMap)
 
   for (const row of resolved) {
-    const csvPlan = mapCsvPlan(row.result.row)
+    const csvPlan = mapCsvPlan(planMap, row.result.row)
     const patNum = row.chosen?.patient.patNum
 
     // Collected for every row, matched or not: an unrecognised string means the mapping
@@ -103,7 +112,12 @@ export const checkPlans = (resolved: ResolvedRow[], subs: ActiveSubs): PlanCheck
       unknownPlanStrings.add(addOns === '' ? plan : `${plan} + ${addOns}`)
     }
 
-    const check = classifyPlan(csvPlan, patNum, patNum === undefined ? undefined : subs.byPatNum.get(patNum))
+    const check = classifyPlan(
+      csvPlan,
+      patNum,
+      patNum === undefined ? undefined : subs.byPatNum.get(patNum),
+      mappedPlans,
+    )
 
     byRowNumber.set(
       row.result.row.rowNumber,
@@ -208,13 +222,13 @@ export const writeReport = (
   outDir: string,
   decisions: Decisions = new Map(),
   subs?: ActiveSubs,
-  planCheckEnabled = false,
+  planMap?: PlanMap,
 ) => {
   mkdirSync(outDir, { recursive: true })
 
   const duplicateGroups = groupDuplicates(results.map((result) => result.row))
   const resolved = resolveRows(results, decisions, duplicateGroups)
-  const checks = planCheckEnabled && subs ? checkPlans(resolved, subs) : undefined
+  const checks = subs && planMap ? checkPlans(resolved, subs, planMap) : undefined
   const records = resolved.map((row) => toReviewRecord(row, checks?.byRowNumber.get(row.result.row.rowNumber)))
 
   const write = (name: string, rows: Record<string, unknown>[]) =>

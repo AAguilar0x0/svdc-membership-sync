@@ -138,6 +138,7 @@
     <div class="tiles" id="tiles"></div>
     <div id="collisions" class="note warn" hidden></div>
     <div id="planwarn" class="note err" hidden></div>
+    <div id="planunconfirmed" class="note warn" hidden></div>
     <div id="chartfilter" class="note info" hidden></div>
     <div class="note info">
       A sizeable <strong>not found</strong> bucket is expected — the membership roster and the
@@ -288,11 +289,23 @@ const renderTiles = () => {
   // An unrecognised plan string is not a row-level curiosity: it means the mapping table is
   // incomplete, so those members cannot be checked at all. Said loudly, in red.
   const unknown = plan?.unknownPlanStrings ?? []
+  const source = state.planMapSource ? esc(state.planMapSource) : 'the plan mapping'
   $('planwarn').hidden = unknown.length === 0
   if (unknown.length) {
-    $('planwarn').innerHTML = `<strong>${unknown.length} plan string(s) are not in the mapping table</strong>`
-      + ' — those members cannot be checked until it is updated: '
+    $('planwarn').innerHTML = `<strong>${unknown.length} plan string(s) are not in <code>${source}</code></strong>`
+      + ' — those members cannot be checked until it is corrected: '
       + unknown.map((value) => `<code>${esc(value)}</code>`).join(', ')
+  }
+
+  // Every string mapping cleanly is not the same as the mapping being right: until someone
+  // has checked it against a real export, "correct" is only as good as a guess in a file.
+  const unconfirmed = plan && state.planMapConfirmed === false
+  $('planunconfirmed').hidden = !unconfirmed
+  if (unconfirmed) {
+    $('planunconfirmed').innerHTML = `<strong>Plan mapping is unconfirmed</strong> — <code>${source}</code>`
+      + ' still carries <code>"confirmed": false</code>, so every plan verdict on this page rests on'
+      + ' values nobody has checked against a real export. Run <code>pnpm discover</code> against the'
+      + ' real file, correct the mapping, then set the flag.'
   }
 
   const collisions = state.summary.collidingPatNums

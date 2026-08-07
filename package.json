@@ -8,6 +8,8 @@
     "web": "tsx src/server.ts",
     "dev": "tsx watch src/server.ts",
     "match": "tsx src/index.ts",
+    "discover": "tsx src/discover.ts",
+    "seed:local-od-plans": "tsx scripts/seed-local-od-plans.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

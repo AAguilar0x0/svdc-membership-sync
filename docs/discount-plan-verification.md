@@ -114,6 +114,24 @@ Both need to be computed per PatNum, after decisions are applied, not per CSV ro
 Roughly a day for the read half, most of it in the UI and the conflict pass rather than
 the query.
 
+## The API, from Open Dental's own docs
+
+Confirmed against [DiscountPlanSubs](https://www.opendental.com/site/apidiscountplansubs.html),
+so these are no longer open:
+
+- `POST /discountplansubs` — requires `DiscountPlanNum` + `PatNum`; `DateEffective`,
+  `DateTerm`, `SubNote` optional and **both default to `0001-01-01`**. So "add with a null
+  effective date" is just omitting the field.
+- `PUT /discountplansubs/{DiscountSubNum}` can set `DateTerm` — terming is supported, so
+  the term-rather-than-delete decision needs no workaround. `DELETE` exists; we will not use it.
+- `GET /discountplansubs?PatNum=` returns **a single object, not a list.**
+
+That last one matters and cuts against the add-then-term ordering recommended below: the
+API models one subscription per patient, so during an overlap the read-back is ambiguous —
+you cannot tell which of the two you are looking at. It does not settle the ordering
+question, but it turns it from a preference into something that needs an actual test
+against a database we are willing to be wrong on.
+
 ## Open questions
 
 1. **Confirm the real `Plan` / `Add-ons` strings** before the mapping is written. Blocking

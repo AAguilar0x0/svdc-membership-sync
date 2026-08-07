@@ -189,20 +189,41 @@ whole practice unenrolled while looking like a clean run. It is a second `SELECT
 into a map keyed by PatNum; joining it into the patient query would multiply patient rows
 and break the matcher.
 
+### The plan mapping is configuration, not code
+
 The CSV's `Plan` and `Add-ons` columns *together* pick one plan — `Add-ons` is not a
-separate axis, and the 3-month / 6-month prefix does not affect which plan is correct:
+separate axis, and the 3-month / 6-month prefix does not affect which plan is correct.
+That mapping lives in **`plans.config.json`**, not in a source file:
 
-| CSV `Plan` + `Add-ons` | Plan |
-| --- | --- |
-| `6 Month- Adult` | 1 · In Office Plan |
-| `6 Month- Adult` + `Fluoride` | 2 · In Office Plan w/Fluoride |
-| `3 Month- Perio` | 3 · In Office Plan Perio |
-| `3 Month- Perio` + `Fluoride` | 5 · In Office Plan Perio W/ Fluoride |
+```json
+{ "plan": "6 Month- Adult", "addOns": "Fluoride", "discountPlanNum": 2, "description": "In Office Plan w/Fluoride" }
+```
 
-**These strings are from the sample export and are not yet confirmed against the real
-one.** An unrecognised combination is never resolved to a default — the row is reported as
-`unknown_csv_plan` and the page shows a red banner naming the strings, because a silent
+Whoever holds the real export is not necessarily whoever can push a commit, so correcting
+the mapping must not require one. Point at a different file with `--plan-map <file>` (CLI)
+or `PLAN_MAP_FILE` (web). A malformed or ambiguous mapping fails at startup with the
+offending entry named, rather than quietly checking nothing.
+
+**The values shipped here come from the sample export and are unconfirmed** — the file
+carries `"confirmed": false`, and both the CLI and the page say so on every run until
+someone sets it. An unrecognised combination is never resolved to a default: the row is
+reported as `unknown_csv_plan` and the page names the offending strings, because a silent
 fallthrough would report "correct" for members nobody has actually checked.
+
+### Finding out what to put in it
+
+`pnpm discover` prints the distinct plan strings in an export and the discount plans in
+Open Dental — **counts only, with no name, DOB, contact detail or PatNum in the output**,
+so the result can be pasted into a chat or a ticket by whoever has the file:
+
+```sh
+pnpm discover ./members.csv        # both halves
+pnpm discover ./members.csv --skip-od
+pnpm discover                      # Open Dental only
+```
+
+It also breaks the chart population down by `PatStatus`, which is what the active-charts
+toggle needs to be decided on something other than a guess.
 
 | Verdict | Meaning |
 | --- | --- |
@@ -217,6 +238,23 @@ fallthrough would report "correct" for members nobody has actually checked.
 Only `wrong_plan` and `no_sub` are counted as **actionable**. Conflicts are held back
 rather than resolved: the export repeats people, and two rows for one patient that
 disagree about the plan are a question for a human, not two API calls.
+
+### Running it locally against real MySQL
+
+The local Open Dental container ships with `discountplan` and `discountplansub` empty, so
+seed them once — this is the only thing in the repo that writes to a database, and it
+**refuses to run against anything but loopback**:
+
+```sh
+pnpm seed:local-od-plans
+pnpm match sample/members.demo-od.sample.csv
+```
+
+That sample is built around the container's demo patients and reaches every verdict:
+correct, wrong plan, no sub, unmapped plan, conflict (a patient with two active subs),
+unknown CSV plan, and one member who is not in the database at all. Note the container
+holds two schemas — the patients are in **`demo`**, not `opendental`, so `OD_DB_URL` needs
+`…:3307/demo`.
 
 Against the database the check always runs. Against a patient fixture it needs
 `--subs-fixture` / `OD_SUBS_FIXTURE` too — without one it goes dark rather than reporting

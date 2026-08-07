@@ -35,16 +35,36 @@ inactive chart excluded.
       charts out removes the candidate, so the row goes quiet — right answer, no
       explanation. Default-off keeps the explanation; default-on keeps the noise down.
 
+## We will never see the real export — what that changed
+
+Settled 8/7: no export data will be shared with us, and OD access here is the local Docker
+seed only. So the mapping cannot be authored from this side, and pretending otherwise would
+ship a tool that hard-errors on every row of the real file.
+
+- [x] Mapping moved out of code into `plans.config.json`, overridable per-run, validated at
+      startup, and marked `"confirmed": false` until someone checks it. Correcting it no
+      longer needs a commit from us.
+- [x] `pnpm discover` — prints the distinct plan strings in an export, the discount plans in
+      OD, and the chart counts by `PatStatus`. Counts only, no patient details, so whoever
+      has the file can run it and paste the output back safely.
+- [x] Local OD seeded with plans and subscriptions (`pnpm seed:local-od-plans`, loopback-only)
+      plus `sample/members.demo-od.sample.csv`, so the whole pipeline runs against real MySQL
+      instead of JSON fixtures — and the write phase has a safe place to be wrong.
+- [ ] **Ask Matthew to run `pnpm discover` against the real export and send back the output.**
+      That is now the entire remaining input needed for the plan mapping, and it contains no PHI.
+
 ## Blocked on Matthew
 
-- [ ] Confirm the real `Plan` / `Add-ons` strings before the mapping table is hardcoded.
-      Everything else in the read half can be built without them.
 - [ ] **Cancelled memberships** — a row with `Active: No` whose patient is still on a plan
       in OD. Drop, or no-op? The buckets have nowhere to put it today.
-- [ ] **Drop/add ordering** for the write phase. Preference is add-then-term, so a partial
-      failure leaves a harmless overlap rather than a patient on no plan at all. Needs
-      someone who knows the OD API to confirm a brief overlap is tolerated.
+- [ ] **Drop/add ordering** for the write phase. The docs say
+      `GET /discountplansubs?PatNum=` returns a *single* object, so the API models one sub
+      per patient and an overlap reads back ambiguously — which weakens the add-then-term
+      preference. Needs a real test against a database we are willing to break, not a
+      decision taken from documentation.
 - [x] Term vs delete on drop — agreed: term, to preserve the audit trail.
+- [x] "Null effective date" — answered by the docs: omit the field and it defaults to
+      `0001-01-01`. No longer a question for anyone.
 
 ## Read-only discount-plan report
 

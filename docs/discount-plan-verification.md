@@ -256,6 +256,11 @@ Guards, in the order they fire:
 - `--decisions` must describe the CSV in front of it, checked row by row against the
   patient names
 - three consecutive failures stop the run, transport failures included
+- an advisory lock keyed on the database URL allows one writing run at a time, and a
+  lock left behind by a killed run is taken over once its process is gone
+- an unreadable line in the log — the truncated last record of a run that was killed
+  mid-append — is skipped and counted, not fatal. Failing the parse would brick the
+  resume that the log exists for, and an unknown outcome belongs outstanding anyway
 
 Every patient appends a JSONL record — before, calls, after, outcome — to
 `out/apply-log.jsonl`, which is also the resume index: a patient with a completed write is

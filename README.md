@@ -311,8 +311,10 @@ treat it as a bug in the matcher.
   before/after verification still go through the read-only SQL path.
 - `DATE` columns are read as strings (`dateStrings: true`) so the driver's local-timezone
   conversion cannot shift a birthdate by a day.
-- The member export and the report are PHI. `.gitignore` covers `out/`, `data/` and
-  `*.xlsx`; keep the real CSV out of the repo.
+- The member export and the report are PHI. `.gitignore` covers `out/`, `data/`, `*.xlsx`
+  and root-level `*.csv` — the last because the usage examples here put the export at the
+  repo root, where nothing else would have stopped `git add -A` from committing it.
+  `sample/*.csv` are fabricated and stay tracked.
 - The server answers only requests whose `Host` is loopback. Binding to `127.0.0.1` keeps
   the network out but not DNS rebinding — without the check, a page open in the operator's
   browser could point its own hostname at `127.0.0.1` and read `/api/results`.
@@ -364,6 +366,12 @@ skip is the tool declining to write ("they now have two active subs") and that i
 the case a human goes and fixes. Three consecutive failures stop the run, including
 connection failures — a dropped connection is one patient's failure, logged and counted,
 not an exception that ends the batch without recording where it got to.
+
+**One writer at a time.** An advisory lock, keyed on the database URL rather than on the
+log or the output directory, refuses to start a second run while one is writing. Two at once
+double-subscribe every patient in the batch — both runs notice, because each verifies its
+own write, but by then every affected patient needs unpicking by hand. A lock left behind by
+a killed run is taken over automatically once its process is gone.
 
 **The run names what it is writing to** before the first call, and says whether that is
 loopback or a real Open Dental. `--decisions` refuses a `review.csv` that does not describe

@@ -4,7 +4,7 @@ import { parseArgs } from 'node:util'
 import { parse } from 'csv-parse/sync'
 import 'dotenv/config'
 
-import { readMemberCsv } from './csv.ts'
+import { readMemberCsv, type MemberRow } from './csv.ts'
 import { matchRow } from './match.ts'
 import { OdApi, loadOdApiConfig, type OdApiOutcome } from './od-api.ts'
 import {
@@ -17,7 +17,7 @@ import {
 } from './od.ts'
 import { DEFAULT_PLAN_MAP_PATH, loadPlanMap } from './plans.ts'
 import { checkPlans, groupDuplicates, resolveRows, summarizePlans, toCsv, type Decisions } from './report.ts'
-import { describeChange, planChanges, sortChanges, type PlannedChange } from './changeset.ts'
+import { CHANGE_ORDER, describeChange, planChanges, sortChanges, type PlannedChange } from './changeset.ts'
 
 /**
  * The write phase. Drops and plan migrations against live Open Dental.
@@ -76,6 +76,15 @@ const main = async () => {
   const outDir = resolve(values.out)
   const logPath = resolve(values.log ?? join(outDir, 'apply-log.jsonl'))
   const termDate = values['term-date'] ?? today()
+  if (!isCalendarDate(termDate)) {
+    throw new Error(`--term-date must be a real YYYY-MM-DD date — got "${termDate}".`)
+  }
+
+  const stopAfterFailures = Number(values['stop-after-failures'])
+  if (!Number.isInteger(stopAfterFailures) || stopAfterFailures < 1) {
+    throw new Error(`--stop-after-failures must be a positive integer — got "${values['stop-after-failures']}".`)
+  }
+
   const order = values.order
   if (order !== 'add-then-term' && order !== 'term-then-add') {
     throw new Error(`--order must be add-then-term or term-then-add — got "${order}".`)
@@ -85,7 +94,7 @@ const main = async () => {
   const planMap = loadPlanMap(resolve(values['plan-map']))
   const patients = await loadOdPatients(odDbUrl)
   const subs = await loadActiveDiscountSubs(odDbUrl)
-  const decisions = values.decisions === undefined ? new Map() : readDecisions(resolve(values.decisions))
+  const decisions = values.decisions === undefined ? new Map() : readDecisions(resolve(values.decisions), rows)
 
   const index = buildOdIndex(patients)
   const resolved = resolveRows(rows.map((row) => matchRow(row, index)), decisions, groupDuplicates(rows))
@@ -110,6 +119,11 @@ const main = async () => {
   // ── Compute the change set ────────────────────────────────────────────────────
   const planned = planChanges(resolved, checks, { includeInactiveCharts: values['include-inactive-charts'] })
   const only = values.only?.split(',').map((value) => value.trim()).filter(Boolean)
+  const unknownActions = only?.filter((action) => !CHANGE_ORDER.includes(action as never)) ?? []
+  if (unknownActions.length > 0) {
+    // Silently matching nothing would print "0 changes" and read like a clean run.
+    throw new Error(`--only does not recognise ${unknownActions.join(', ')}. Valid actions: ${CHANGE_ORDER.join(', ')}.`)
+  }
   const selected = only === undefined ? planned.changes : planned.changes.filter((c) => only.includes(c.action))
   const done = values.fresh ? new Map<number, string>() : readLog(logPath)
   const outstanding = sortChanges(selected).filter((change) => !isDone(done, change))
@@ -159,8 +173,20 @@ const main = async () => {
     logPath,
     termDate,
     order,
-    stopAfterFailures: Number(values['stop-after-failures']),
+    stopAfterFailures,
   })
+}
+
+/**
+ * Not just the shape: `2026-02-31` matches the pattern and is not a day. Open Dental is
+ * forgiving about dates in a way that hurts here — a `DateTerm` it cannot read can come
+ * back as the `0001-01-01` sentinel, which does not mean "terminated today", it means
+ * "still active". The post-write read would catch it; catching it before the write is better.
+ */
+const isCalendarDate = (value: string) => {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false
+  const parsed = new Date(`${value}T00:00:00Z`)
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().startsWith(value)
 }
 
 const today = () => {
@@ -175,17 +201,36 @@ const today = () => {
  * Without this an apply run would re-derive every match from scratch and quietly overrule
  * the human: a row somebody rejected as "none of these" would match again and be written.
  */
-const readDecisions = (path: string): Decisions => {
+const readDecisions = (path: string, rows: MemberRow[]): Decisions => {
   const records = parse(readFileSync(path), { bom: true, columns: true, skip_empty_lines: true, trim: true }) as Record<
     string,
     string
   >[]
 
+  // A decision is keyed by row number, and row numbers mean nothing across two different
+  // exports. Handed last month's review.csv, every decision would land on whoever occupies
+  // that row today — a reviewer's "none of these" silently reassigned to a stranger. So the
+  // file has to prove it describes this CSV before any of it is believed.
+  const byRowNumber = new Map(rows.map((row) => [row.rowNumber, row]))
   const decisions: Decisions = new Map()
+
   for (const record of records) {
-    if ((record['Resolved By'] ?? '') !== 'human') continue
     const rowNumber = Number(record['CSV Row'])
     if (!Number.isInteger(rowNumber)) continue
+
+    const row = byRowNumber.get(rowNumber)
+    if (row === undefined) {
+      throw new Error(`${path} has a decision for CSV row ${rowNumber}, which this export does not have.`)
+    }
+    const named = (record['Patient Name'] ?? '').trim()
+    if (named !== '' && named !== row.raw.patientName) {
+      throw new Error(
+        `${path} does not describe this export: its row ${rowNumber} is "${named}", ` +
+          `this file's row ${rowNumber} is "${row.raw.patientName}". Re-export the review from this CSV.`,
+      )
+    }
+
+    if ((record['Resolved By'] ?? '') !== 'human') continue
     const patNum = (record.PatNum ?? '').trim()
     decisions.set(rowNumber, { patNum: patNum === '' ? null : Number(patNum) })
   }
@@ -205,9 +250,13 @@ type LogRecord = {
 }
 
 /**
- * The log is the resume index. A patient already written or deliberately skipped is not
- * touched again; a failure is left outstanding so a re-run picks it up, which is the
- * behaviour a mid-run failure needs — no guesswork about where it stopped.
+ * The log is the resume index, and only a completed **write** counts as done.
+ *
+ * Failures obviously stay outstanding. So do skips: a skip is not an outcome, it is the
+ * tool declining to write because the patient no longer looked like the plan — "they now
+ * have two active subs", "someone enrolled them since the report". Those are exactly the
+ * cases a human goes and fixes, and the re-run afterwards has to pick them up rather than
+ * remember them as settled. Re-attempting one that was already fine costs a single SELECT.
  */
 const readLog = (path: string) => {
   const done = new Map<number, string>()
@@ -216,7 +265,7 @@ const readLog = (path: string) => {
   for (const line of readFileSync(path, 'utf8').split('\n')) {
     if (line.trim() === '') continue
     const record = JSON.parse(line) as LogRecord
-    if (record.outcome === 'failed') continue
+    if (record.outcome !== 'written') continue
     done.set(record.patNum, record.action)
   }
   return done
@@ -228,13 +277,21 @@ const execute = async (
   batch: PlannedChange[],
   options: { odDbUrl: string; logPath: string; termDate: string; order: string; stopAfterFailures: number },
 ) => {
-  const api = new OdApi(loadOdApiConfig())
+  const config = loadOdApiConfig()
+  const api = new OdApi(config)
   const connection = await openOdConnection(options.odDbUrl)
+  const host = new URL(config.baseUrl).hostname
+  const isLoopback = ['localhost', '127.0.0.1', '::1'].includes(host)
   const counts = { written: 0, skipped: 0, failed: 0 }
   let consecutiveFailures = 0
 
+  // Named, every time, because "which Open Dental am I pointed at" is the one thing an
+  // operator must not have to infer from an environment variable they set an hour ago.
   console.log(`
 ── Applying ─────────────────────────────────────
+  Writing to ${config.baseUrl}
+  ${isLoopback ? 'Loopback — this is the local stub, not the practice.' : '⚠ NOT loopback — this is a real Open Dental.'}
+
   ${batch.length} patient(s), ordering ${options.order}, term date ${options.termDate}
   Log: ${options.logPath}
 `)
@@ -380,8 +437,7 @@ const toChangeRecord = (change: PlannedChange) => ({
 })
 
 const toHeldBackRecord = (change: ReturnType<typeof planChanges>['heldBack'][number]) => ({
-  ...toChangeRecord({ ...change, currentPlanNum: undefined, currentSubNum: undefined, targetPlanNum: undefined }),
-  Change: '',
+  ...toChangeRecord(change),
   Reason: change.reason,
 })
 

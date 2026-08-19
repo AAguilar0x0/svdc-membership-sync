@@ -25,15 +25,14 @@ export type PlannedChange = {
   rowNumbers: number[]
 }
 
-/** An actionable verdict the planner still refused to turn into a write, and why. */
-export type HeldBackChange = {
-  patNum: number
-  action: Exclude<PlanAction, 'none'>
-  patientName: string
-  chartStatus: string
-  rowNumbers: number[]
-  reason: string
-}
+/**
+ * An actionable verdict the planner still refused to turn into a write, and why.
+ *
+ * It carries the whole change, not a summary of it: this file is what a human picks up to
+ * decide the cases the tool would not, and "Junior Smith, add, held back" without the plan
+ * he would have been put on is not a decision anybody can make.
+ */
+export type HeldBackChange = PlannedChange & { reason: string }
 
 export const planChanges = (
   resolved: ResolvedRow[],

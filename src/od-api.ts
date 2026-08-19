@@ -17,6 +17,8 @@ export type OdApiConfig = {
   authorization: string
   /** Minimum gap between writes. OD Cloud rate-limits; the local API does not care. */
   rateLimitMs: number
+  /** Per-request ceiling. Without one a hung OD stalls the whole batch indefinitely. */
+  timeoutMs: number
 }
 
 /**
@@ -50,8 +52,21 @@ export const loadOdApiConfig = (): OdApiConfig => {
   return {
     baseUrl: baseUrl.replace(/\/$/, ''),
     authorization,
-    rateLimitMs: Number(process.env.OD_WRITE_RATE_LIMIT_MS ?? 1000),
+    rateLimitMs: positiveNumber(process.env.OD_WRITE_RATE_LIMIT_MS, 1000, 'OD_WRITE_RATE_LIMIT_MS'),
+    timeoutMs: positiveNumber(process.env.OD_API_TIMEOUT_MS, 30_000, 'OD_API_TIMEOUT_MS'),
   }
+}
+
+/**
+ * A misspelt number here used to be silent and one-directional: `Number('5s')` is `NaN`,
+ * every comparison against it is false, and the rate limit simply stops existing. Fail
+ * instead — an unpaced batch against OD Cloud is not something to discover from the logs.
+ */
+const positiveNumber = (raw: string | undefined, fallback: number, name: string) => {
+  if (raw === undefined || raw.trim() === '') return fallback
+  const value = Number(raw)
+  if (!Number.isFinite(value) || value < 0) throw new Error(`${name} must be a non-negative number — got "${raw}".`)
+  return value
 }
 
 export type OdApiCall = {
@@ -118,11 +133,24 @@ export class OdApi {
   private async send(call: OdApiCall): Promise<OdApiOutcome> {
     await this.pace()
 
-    const response = await fetch(`${this.config.baseUrl}${call.path}`, {
-      method: call.method,
-      headers: { Authorization: this.config.authorization, 'content-type': 'application/json' },
-      body: JSON.stringify(call.body),
-    })
+    let response: Response
+    try {
+      response = await fetch(`${this.config.baseUrl}${call.path}`, {
+        method: call.method,
+        headers: { Authorization: this.config.authorization, 'content-type': 'application/json' },
+        body: JSON.stringify(call.body),
+        signal: AbortSignal.timeout(this.config.timeoutMs),
+      })
+    } catch (error: unknown) {
+      // A dropped connection is one patient's failure, not the run's. Thrown from here it
+      // would escape the executor and kill the batch *without* writing that patient's log
+      // record — the one thing a resumable run cannot afford to lose. Reported as an
+      // outcome instead, so it is logged, counted, and subject to the stop-after-failures
+      // rule like any other failure.
+      this.lastWriteAt = Date.now()
+      const reason = error instanceof Error ? `${error.name}: ${error.message}` : String(error)
+      return { call, status: 0, ok: false, response: `request did not complete — ${reason}` }
+    }
 
     this.lastWriteAt = Date.now()
 

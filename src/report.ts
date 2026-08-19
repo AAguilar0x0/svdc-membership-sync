@@ -92,8 +92,10 @@ export type PlanChecks = {
  *
  * Two passes, because the second one cannot be done a row at a time: the export repeats
  * people, and two rows for one patient that disagree about the plan are a conflict, not
- * two instructions. Same for two different members matched to a single PatNum. Neither is
- * *resolved* here — at this stage they are pulled out of the actionable count and handed
+ * two instructions. Same for two different members matched to a single PatNum. A cancelled
+ * row for a patient who also has a live one is not an instruction at all — the live row
+ * governs, or a re-enrolled member would be termed off the plan they just bought. Neither
+ * conflict is *resolved* here — at this stage they are pulled out of the actionable count and handed
  * to a human, which is the honest outcome for a spreadsheet that contradicts itself.
  */
 export const checkPlans = (resolved: ResolvedRow[], subs: ActiveSubs, planMap: PlanMap): PlanChecks => {
@@ -112,12 +114,13 @@ export const checkPlans = (resolved: ResolvedRow[], subs: ActiveSubs, planMap: P
       unknownPlanStrings.add(addOns === '' ? plan : `${plan} + ${addOns}`)
     }
 
-    const check = classifyPlan(
+    const check = classifyPlan({
       csvPlan,
       patNum,
-      patNum === undefined ? undefined : subs.byPatNum.get(patNum),
+      sub: patNum === undefined ? undefined : subs.byPatNum.get(patNum),
       mappedPlans,
-    )
+      isMembershipActive: row.result.row.isActive,
+    })
 
     byRowNumber.set(
       row.result.row.rowNumber,
@@ -128,17 +131,39 @@ export const checkPlans = (resolved: ResolvedRow[], subs: ActiveSubs, planMap: P
   }
 
   for (const [patNum, rows] of groupByPatNum(resolved)) {
-    if (rows.length < 2) continue
-    const intents = new Set(rows.map((row) => byRowNumber.get(row.result.row.rowNumber)?.csvPlanNum))
+    const active = rows.filter((row) => row.result.row.isActive)
+
+    // A cancelled row for someone who also has a live membership row is a re-enrollment,
+    // not a drop. Terming the plan off them because of the row they cancelled last year
+    // would take the plan off a current member — so the active row governs and the
+    // cancelled one stops being an instruction.
+    if (active.length > 0) {
+      for (const row of rows) {
+        if (row.result.row.isActive) continue
+        const check = byRowNumber.get(row.result.row.rowNumber)
+        if (check?.verdict !== 'should_drop') continue
+        byRowNumber.set(row.result.row.rowNumber, {
+          ...check,
+          verdict: 'cancelled',
+          note: `cancelled row, but patient ${patNum} also has an active membership row — that row governs`,
+        })
+      }
+    }
+
+    // Only active rows carry an intent. A cancelled row naming a different plan is not a
+    // second opinion about what this patient should be on, and treating it as one would
+    // hold back the migration the live row is asking for.
+    if (active.length < 2) continue
+    const intents = new Set(active.map((row) => byRowNumber.get(row.result.row.rowNumber)?.csvPlanNum))
     if (intents.size < 2) continue
 
-    for (const row of rows) {
+    for (const row of active) {
       const check = byRowNumber.get(row.result.row.rowNumber)
       if (check === undefined) continue
       byRowNumber.set(row.result.row.rowNumber, {
         ...check,
         verdict: 'conflict',
-        note: `${rows.length} CSV rows disagree about patient ${patNum}`,
+        note: `${active.length} active CSV rows disagree about patient ${patNum}`,
       })
     }
   }
@@ -163,6 +188,8 @@ export const summarizePlans = (checks: PlanChecks) => {
     correct: 0,
     wrong_plan: 0,
     no_sub: 0,
+    should_drop: 0,
+    cancelled: 0,
     unmapped_od_plan: 0,
     unknown_csv_plan: 0,
     conflict: 0,
@@ -208,6 +235,7 @@ export const toReviewRecord = (row: ResolvedRow, check?: PlanCheck) => {
     'OD Plan Num': check?.odPlanNum ?? '',
     'OD Plan': check?.odPlanDescription ?? '',
     'OD Plan Effective': check?.odEffectiveDate ?? '',
+    'OD Sub Num': check?.odSubNum ?? '',
     'Candidate 1': describeCandidate(best),
     'Candidate 2': describeCandidate(second),
     'Candidate 3': describeCandidate(third),

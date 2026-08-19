@@ -204,6 +204,10 @@ ${line('not_found', 'not found')}
  * The plan check, read-only. `correct` means no action — we do not touch effective dates
  * on people who are already right — and everything that is not a clean instruction is
  * listed separately, so the actionable number is never inflated by rows nobody has read.
+ *
+ * `should drop` is a cancelled membership whose patient still holds the plan; `cancelled`
+ * is a cancelled membership with nothing to take off. Both used to read as `correct`,
+ * which was the one verdict in here that was definitely wrong.
  */
 const printPlanSummary = (checks: ReturnType<typeof checkPlans>, planMap: PlanMap) => {
   const summary = summarizePlans(checks)
@@ -213,6 +217,8 @@ const printPlanSummary = (checks: ReturnType<typeof checkPlans>, planMap: PlanMa
 ${line('correct')}
 ${line('wrong_plan')}
 ${line('no_sub')}
+${line('should_drop')}
+${line('cancelled')}
 
   needs a human
 ${line('unmapped_od_plan')}
@@ -220,7 +226,7 @@ ${line('conflict')}
 ${line('unknown_csv_plan')}
 ${line('ineligible')}
 
-  actionable          ${summary.actionable}  (wrong plan + no sub, conflicts excluded)`)
+  actionable          ${summary.actionable}  (wrong plan + no sub + should drop, conflicts excluded)`)
 
   if (summary.unknownPlanStrings.length > 0) {
     console.log(`

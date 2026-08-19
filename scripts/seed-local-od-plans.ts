@@ -37,6 +37,10 @@ const SUB_PATTERN = [
   { offset: 5, plan: 1, effective: '2025-05-09' },
   { offset: 5, plan: 2, effective: '2025-07-01' },
   { offset: 6, plan: 2, effective: '2025-08-18' },
+  // The last two exist for the cancelled half of the export: one member who cancelled and
+  // is still holding a plan, and one who cancelled an old membership but is on a live one.
+  { offset: 11, plan: 1, effective: '2024-02-01' },
+  { offset: 12, plan: 2, effective: '2024-03-01' },
 ] as const
 
 const main = async () => {

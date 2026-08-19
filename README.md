@@ -358,8 +358,17 @@ state is exactly one active sub on the intended plan. This is SQL and not the AP
 is current nor reveal a double-subscribe.
 
 **A failed run is re-run with the same command.** Every patient appends a record — before,
-calls, after, outcome — to `out/apply-log.jsonl`, which is also the resume index. Patients
-already written or skipped are never touched again. Three consecutive failures stop the run.
+calls, after, outcome — to `out/apply-log.jsonl`, which is also the resume index. Only a
+completed **write** counts as done: failures stay outstanding, and so do skips, because a
+skip is the tool declining to write ("they now have two active subs") and that is exactly
+the case a human goes and fixes. Three consecutive failures stop the run, including
+connection failures — a dropped connection is one patient's failure, logged and counted,
+not an exception that ends the batch without recording where it got to.
+
+**The run names what it is writing to** before the first call, and says whether that is
+loopback or a real Open Dental. `--decisions` refuses a `review.csv` that does not describe
+the CSV in front of it: decisions are keyed by row number, and against last month's export
+every one of them would land on whoever occupies that row today.
 
 ### Trying it against the local container first
 

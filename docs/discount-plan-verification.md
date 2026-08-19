@@ -249,12 +249,19 @@ Guards, in the order they fire:
   data moved since the dry run, the run aborts instead of writing a different batch
 - no patient may appear twice in a batch
 - adds and migrations onto a chart that is not `PatStatus = Patient` are held back
-- three consecutive failures stop the run
+- `--term-date`, `--only`, `--limit`, `--stop-after-failures` and the rate-limit and
+  timeout environment variables are all validated before anything runs. A misspelt number
+  used to be silent and one-directional: `Number('5s')` is `NaN`, every comparison against
+  it is false, and the guard it configures simply stops existing
+- `--decisions` must describe the CSV in front of it, checked row by row against the
+  patient names
+- three consecutive failures stop the run, transport failures included
 
 Every patient appends a JSONL record — before, calls, after, outcome — to
-`out/apply-log.jsonl`, which is also the resume index: a patient already written or
-skipped is never touched again, so a mid-run failure is recovered by re-running the same
-command. `--decisions <review.csv>` carries the reviewer's decisions from the UI, so a row
+`out/apply-log.jsonl`, which is also the resume index: a patient with a completed write is
+never written twice, while failures and skips stay outstanding for the re-run — a skip means
+the database stopped matching the plan, which is a thing a human resolves and the next run
+should then pick up. `--decisions <review.csv>` carries the reviewer's decisions from the UI, so a row
 somebody rejected as "none of these" is not silently re-matched and written.
 
 ### The ordering, tested

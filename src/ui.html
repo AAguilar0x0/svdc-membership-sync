@@ -44,7 +44,9 @@
     font: inherit; font-size: .85rem; padding: .4rem .75rem; border-radius: 7px;
     border: 1px solid var(--border); background: var(--panel); color: var(--text); cursor: pointer;
   }
-  button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+  /* Not `.active`: a filled tab already uses the accent as its background, and tinting the
+     label to match on hover renders it accent-on-accent — invisible under the cursor. */
+  button:hover:not(:disabled):not(.active) { border-color: var(--accent); color: var(--accent); }
   button:disabled { opacity: .45; cursor: not-allowed; }
   button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
   button.primary:hover { opacity: .9; color: #fff; }
@@ -237,15 +239,26 @@ const decide = async (rowNumber, patNum) => {
   } catch (error) { showError(error.message) }
 }
 
-const LABELS = { all: 'All', matched: 'Matched', ambiguous: 'Ambiguous', not_found: 'Not found', review: 'Needs review' }
+// The last two are plan buckets rather than match buckets: they are the rows the write
+// phase would actually touch, and a reviewer signing off on a batch wants only those.
+const LABELS = {
+  all: 'All', matched: 'Matched', ambiguous: 'Ambiguous', not_found: 'Not found', review: 'Needs review',
+  wrong_plan: 'Wrong plan', should_drop: 'To drop',
+}
 
 const PLAN_LABELS = {
-  correct: 'Correct', wrong_plan: 'Wrong plan', no_sub: 'No sub', unmapped_od_plan: 'Unmapped plan',
+  correct: 'Correct', wrong_plan: 'Wrong plan', no_sub: 'No sub', should_drop: 'Should drop',
+  cancelled: 'Cancelled', unmapped_od_plan: 'Unmapped plan',
   unknown_csv_plan: 'Unknown CSV plan', conflict: 'Conflict', ineligible: 'Not matched',
 }
-/** Only 'correct' is good news; 'wrong plan' and 'no sub' are work; the rest need a human. */
+/**
+ * 'correct' and 'cancelled' are both already-right, and 'cancelled' is the larger half of
+ * this export — it is dimmed rather than green so it cannot be read as a success number.
+ * 'wrong plan', 'no sub' and 'should drop' are work; the rest need a human.
+ */
 const PLAN_BADGE = {
-  correct: 'matched', wrong_plan: 'not_found', no_sub: 'not_found', unmapped_od_plan: 'ambiguous',
+  correct: 'matched', wrong_plan: 'not_found', no_sub: 'not_found', should_drop: 'not_found',
+  cancelled: 'dup', unmapped_od_plan: 'ambiguous',
   unknown_csv_plan: 'ambiguous', conflict: 'ambiguous', ineligible: 'dup',
 }
 
@@ -253,6 +266,8 @@ const visibleRows = () => {
   const rows = state.rows.filter((row) => {
     if (filter === 'all') return true
     if (filter === 'review') return row.status !== 'matched' && row.resolvedBy === 'auto'
+    if (filter === 'wrong_plan') return row.plan?.verdict === 'wrong_plan'
+    if (filter === 'should_drop') return row.plan?.verdict === 'should_drop'
     return row.status === filter
   })
   if (!query) return rows
@@ -278,6 +293,8 @@ const renderTiles = () => {
       ['matched', 'Plan correct', plan.correct],
       ['not_found', 'Wrong plan', plan.wrong_plan],
       ['not_found', 'No sub', plan.no_sub],
+      ['not_found', 'Should drop', plan.should_drop],
+      ['', 'Cancelled', plan.cancelled],
       ['ambiguous', 'Plan needs review', plan.unmapped_od_plan + plan.conflict + plan.unknown_csv_plan],
     )
   }
@@ -350,6 +367,8 @@ const renderTabs = () => {
     ambiguous: state.summary.ambiguous,
     not_found: state.summary.not_found,
     review: state.rows.filter((r) => r.status !== 'matched' && r.resolvedBy === 'auto').length,
+    wrong_plan: state.rows.filter((r) => r.plan?.verdict === 'wrong_plan').length,
+    should_drop: state.rows.filter((r) => r.plan?.verdict === 'should_drop').length,
   }
   $('tabs').innerHTML = Object.entries(LABELS)
     .map(([key, label]) => `<button class="tab${filter === key ? ' active' : ''}" data-tab="${key}">${label} <span class="muted">${counts[key]}</span></button>`)

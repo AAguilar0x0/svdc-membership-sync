@@ -1,7 +1,8 @@
 # svdc-membership-sync
 
-One-time local tool for reconciling a membership-plan export against Open Dental. This
-repo implements the first half of that: **matching each member to a patient number**.
+One-time local tool for reconciling a membership-plan export against Open Dental:
+**match each member to a patient number**, **check the discount plan they are on**, and
+**write the difference back** — drops first, then the plan migrations.
 
 It is deliberately *not* part of `svdc-webapp`: no product feature, no scheduler job, no
 service layer. The review UI here is a local page served from this repo, run on the
@@ -15,10 +16,13 @@ with the CLI.
 
 Reads the membership CSV (`Patient Name, DOB, Email, Phone, Plan Start Date, Plan,
 Add-ons, Active`), reads the Open Dental `patient` table with a **single SELECT**,
-and produces a reviewable **three-way split** — matched / ambiguous / not found.
+and produces a reviewable **three-way split** — matched / ambiguous / not found. For every
+matched member it then says whether they are on the right discount plan, and whether they
+should be on one at all: half the real export is cancelled memberships.
 
-It never writes. Not to Open Dental, not anywhere. Enrolling the matched patients on
-the discount plan is a separate step that only runs once this report is approved.
+Matching and reporting never write. The write phase is a separate command
+([below](#the-write-phase)), dry-run by default, and it will not run without a change count
+that was signed off on the dry run it came from.
 
 ## Usage
 
@@ -46,6 +50,11 @@ pnpm match ./members.csv --out reports --active-only
 | `--fixture <file>` | match against a JSON patient fixture instead of the DB — offline dry run |
 | `--subs-fixture <file>` | `discountplansub` fixture, so the plan check runs offline too |
 
+```sh
+pnpm discover ./members.csv          # what plan strings are in the file (counts only)
+pnpm apply ./members.csv             # the change set, dry run — writes nothing
+```
+
 ## The review UI
 
 `pnpm web` serves a local page on **127.0.0.1 only** — it handles PHI and must never be
@@ -53,8 +62,9 @@ reachable from the network. Set `PORT` to move it.
 
 - **Summary tiles** — matched / ambiguous / not found, distinct PatNums, duplicate rows.
 - **A collision banner** when one PatNum is claimed by more than one CSV row.
-- **Tabs and search**, including a **Needs review** tab: everything the matcher would not
-  call on its own.
+- **Tabs and search**, including a **Needs review** tab (everything the matcher would not
+  call on its own) and two plan tabs — **Wrong plan** and **To drop** — which are the rows
+  the write phase would actually touch, and the ones a reviewer signs off on.
 - **Expand any row** to see the candidates it considered, with their score and the exact
   signals that fired (`DOB + phone (wireless) + last name`). For an ambiguous row you pick
   the right patient, or say **None of these**. **Undo my decision** puts it back to the
@@ -140,8 +150,12 @@ Four files in `--out` (the same four are available from the UI's export buttons)
 - `matched.csv` / `ambiguous.csv` / `not-found.csv` — the same rows, split, so a
   bucket can be handed round on its own.
 
-Every row carries its original CSV columns through, so `matched.csv` is directly
-consumable by the enrollment step.
+Every row carries its original CSV columns through, plus the plan verdict, the plan OD has
+and its `OD Sub Num` — the `discountplansub` PK, without which nothing can be dropped.
+
+`pnpm apply` writes two more: `changeset.csv`, the per-patient plan of what would be
+written, and `changeset-held-back.csv`, the actionable rows it refused to turn into a write
+and why. Both name patients, so they are PHI; `out/` is gitignored.
 
 The summary also flags **duplicate CSV rows** (grouped on name + DOB + phone; email is
 left out of the key because the same person is often exported once with an address and
@@ -204,9 +218,13 @@ the mapping must not require one. Point at a different file with `--plan-map <fi
 or `PLAN_MAP_FILE` (web). A malformed or ambiguous mapping fails at startup with the
 offending entry named, rather than quietly checking nothing.
 
-**The values shipped here come from the sample export and are unconfirmed** — the file
-carries `"confirmed": false`, and both the CLI and the page say so on every run until
-someone sets it. An unrecognised combination is never resolved to a default: the row is
+**The values shipped here were checked against the real export on 8/19** and the file
+carries `"confirmed": true`; until it does, the CLI and the page say so on every run and
+`pnpm apply` refuses to write at all. Two things the sample had wrong and the real file
+settled: the add-on column says **`Fluoride Varnish`**, not `Fluoride` (both spellings are
+mapped now), and there are **child plans**, which all go to plan 2 — OD has no
+child-specific plan and children are on the w/Fluoride plan. An unrecognised combination is
+never resolved to a default: the row is
 reported as `unknown_csv_plan` and the page names the offending strings, because a silent
 fallthrough would report "correct" for members nobody has actually checked.
 
@@ -231,11 +249,13 @@ toggle needs to be decided on something other than a guess.
 | `wrong_plan` | on a different mapped plan |
 | `no_sub` | matched patient with no active subscription |
 | `unmapped_od_plan` | on a plan outside the table (4, 6, 7…) — human review, raw number shown |
+| `should_drop` | membership cancelled, patient still holds a mapped plan — **term it** |
+| `cancelled` | membership cancelled, nothing on the patient to take off — no action |
 | `unknown_csv_plan` | CSV plan string we do not recognise |
 | `conflict` | two CSV rows disagree about one patient, or the patient has two active subs |
 | `ineligible` | never matched — no PatNum to act on, and **not** counted as correct |
 
-Only `wrong_plan` and `no_sub` are counted as **actionable**. Conflicts are held back
+Only `wrong_plan`, `no_sub` and `should_drop` are counted as **actionable**. Conflicts are held back
 rather than resolved: the export repeats people, and two rows for one patient that
 disagree about the plan are a question for a human, not two API calls.
 
@@ -252,7 +272,9 @@ pnpm match sample/members.demo-od.sample.csv
 
 That sample is built around the container's demo patients and reaches every verdict:
 correct, wrong plan, no sub, unmapped plan, conflict (a patient with two active subs),
-unknown CSV plan, and one member who is not in the database at all. Note the container
+unknown CSV plan, one member who is not in the database at all, a cancelled member still
+holding a plan (`should_drop`), a cancelled member with nothing to take off, and a
+cancelled row for someone who has since re-enrolled — which is *not* a drop. Note the container
 holds two schemas — the patients are in **`demo`**, not `opendental`, so `OD_DB_URL` needs
 `…:3307/demo`.
 
@@ -280,9 +302,13 @@ treat it as a bug in the matcher.
 
 ## Safety
 
-- Two statements run against OD, both `SELECT`: one over `patient`, one over
-  `discountplansub` joined to `discountplan` for the description. Use a SELECT-only MySQL
-  user if one exists.
+- **Everything except `pnpm apply --apply` is read-only.** Matching, the plan check, the
+  review UI, `pnpm discover` and the dry run run `SELECT` and nothing else, over
+  `OD_DB_URL`. Use a SELECT-only MySQL user for them if one exists.
+- The write phase writes over the **REST API**, never over SQL, and only ever
+  `discountplansub` rows: `PUT` to set a `DateTerm`, `POST` to add a subscription. No
+  `DELETE`, and nothing else in the database is touched. Its own reads and its
+  before/after verification still go through the read-only SQL path.
 - `DATE` columns are read as strings (`dateStrings: true`) so the driver's local-timezone
   conversion cannot shift a birthdate by a day.
 - The member export and the report are PHI. `.gitignore` covers `out/`, `data/` and
@@ -293,15 +319,73 @@ treat it as a bug in the matcher.
 - Every value rendered into the results table is escaped, including the ones that come
   from the CSV rather than from OD.
 
-## Still open before enrollment
+## The write phase
 
-Verifying which discount plan each member is *already* on is scoped in
-[`docs/discount-plan-verification.md`](docs/discount-plan-verification.md) — read-only
-report first, writes only after it has been reviewed. Also open:
+`pnpm apply <members.csv>` — **dry run by default**. It rebuilds the report, turns it into
+one intent per patient, prints the change set (`current plan → target → action`) and writes
+`out/changeset.csv` for sign-off. That is the whole run unless `--apply` is passed.
 
-- Confirm the real `Plan` / `Add-ons` strings in the live export before the plan mapping
-  is hardcoded.
-- Read a patient's existing plan subscriptions immediately before writing, not from the
-  report. The create call has no idempotency key, so a blind re-run double-subscribes.
-- Enrollment would be the first write this project makes to live Open Dental. Confirm
-  that explicitly with the practice owner before the first run.
+```sh
+pnpm apply ./members.csv                                     # dry run — writes nothing
+pnpm apply ./members.csv --only drop    --apply --expect 412  # drops first
+pnpm apply ./members.csv --only migrate --limit 10 --apply --expect 10   # pilot ten
+pnpm apply ./members.csv --only migrate --apply --expect 176  # then the rest
+```
+
+| Flag | Effect |
+| --- | --- |
+| `--apply` | actually write. Refused without `--expect` |
+| `--expect <n>` | the change count that was signed off; a mismatch aborts the run |
+| `--only drop,add,migrate` | restrict to these actions |
+| `--limit <n>` | only the first n patients — this is how the pilot runs |
+| `--decisions <review.csv>` | honour the reviewer's decisions from an exported `review.csv` |
+| `--order <a>` | `add-then-term` (default) or `term-then-add` |
+| `--term-date <date>` | the `DateTerm` to write (default: today) |
+| `--include-inactive-charts` | also add/migrate on charts that are not `PatStatus = Patient` |
+| `--log <file>` / `--fresh` | the per-patient JSONL log and resume index |
+
+**One intent per patient, not per row.** The export repeats people: two rows asking for the
+same thing are one write, and two rows asking for different things are not a write at all.
+
+**Cancelled members are dropped, never migrated.** A cancelled Perio member is not moved
+onto plan 3 and then termed — whatever they hold is termed, and nothing else. A cancelled
+row for someone who has since re-enrolled is not a drop either: the active row governs.
+
+**Every write is bracketed by a SQL re-read.** Before, to check the patient still looks like
+the plan assumed — anything that moved is skipped, never guessed. After, to confirm the end
+state is exactly one active sub on the intended plan. This is SQL and not the API because
+`GET /discountplansubs?PatNum=` returns a single object, so it can neither prove which sub
+is current nor reveal a double-subscribe.
+
+**A failed run is re-run with the same command.** Every patient appends a record — before,
+calls, after, outcome — to `out/apply-log.jsonl`, which is also the resume index. Patients
+already written or skipped are never touched again. Three consecutive failures stop the run.
+
+### Trying it against the local container first
+
+The local Open Dental here is MariaDB with no REST service in front of it, so
+`scripts/fake-od-api.ts` implements the two endpoints against the seeded container. It is
+loopback-only and refuses to start against a non-loopback database.
+
+```sh
+pnpm seed:local-od-plans
+pnpm fake-od-api                                   # 127.0.0.1:5179
+OD_API_URL=http://127.0.0.1:5179 OD_API_TOKEN=local/dev   pnpm apply sample/members.demo-od.sample.csv --apply --expect 1 --only drop
+```
+
+`FAKE_OD_REJECT_OVERLAP=1` makes it refuse a `POST` for a patient who already holds an
+active sub, which is the branch `add-then-term` has to survive. It does: the first call
+fails, the patient is left exactly as they were, and `--order term-then-add` completes.
+
+A local pass proves our sequencing, verification, logging and resume are right. It does not
+prove the real API tolerates the overlap — that is the stub's behaviour, not OD's, and the
+first pilot patient answers it.
+
+## Still open
+
+- The **active-charts-only** default is still Matthew's call. It is a matching question and
+  separate from the write phase's chart guard, which is decided: drops go ahead on any
+  chart, adds and migrations onto a chart that is not `PatStatus = Patient` are held back
+  into `changeset-held-back.csv`.
+- **Owner sign-off on the first live write.** The dry run's change set and its `--expect`
+  number are the thing to sign off.

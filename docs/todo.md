@@ -1,113 +1,77 @@
 # TODO
 
-Proof-of-concept scope. The bar is "a report a human can act on", not production
-hardening — see *Deliberately not doing* at the bottom for what that rules out.
+Proof-of-concept scope. The bar is "a report a human can act on", and now "a change set a
+human can sign off" — see *Deliberately not doing* at the bottom for what that still rules out.
 
 Design detail for the discount-plan work lives in
 [`discount-plan-verification.md`](discount-plan-verification.md).
 
-## Next
+## Next — the run
 
-- [x] Push the review-hardening and security commits.
-- [ ] **Run the real export through the matcher** (read-only, as-is). One pass answers
-      three open questions at once: the real distinct `Plan` / `Add-ons` strings, the true
-      matched / ambiguous / not-found split, and whether the Perio mismatch is real.
-- [ ] Eyeball the Perio count. Ten patients are on a Perio plan in OD; if the export has
-      hundreds, that is a data conversation before it is a code change.
+Everything below this line is built and tested against the local seeded Open Dental.
+Nothing has been written to the practice database.
 
-> **The plan lives in `discountplansub`, not `patient.DiscountPlanNum`.** The earlier
-> advice to read that column is superseded — it is zero for every patient in this install,
-> so a report built on it calls the whole practice unenrolled while looking like it worked.
+- [ ] **Matthew signs off on the dry run.** `pnpm apply <members.csv>` prints the change
+      set, one line per patient (`current plan → target → action`), and writes
+      `out/changeset.csv`. He signs off on that file and the `--expect` number on it.
+- [ ] **Drops first.** `--only drop --apply --expect <n>`. One `PUT` each, no ordering
+      risk, and it is the half of the export nobody has to think about.
+- [ ] **Pilot ten migrations.** `--only migrate --limit 10 --apply --expect 10`, then read
+      those ten patients in SQL. This is also what answers whether the real API tolerates
+      the overlapping `POST`; if it refuses, re-run with `--order term-then-add`.
+- [ ] **Then the rest** — roughly 186 people moving from plan 1/2 to 3/5.
 
-## Active-charts filter — built, needs his call
+## Done — the real export, 8/19
 
-Asked twice (8/5) and now in: a toggle in the UI and `--active-charts-only` on the CLI,
-narrowing candidates to `PatStatus = Patient`. **Off by default**, because it is a real
-narrowing rather than a display filter and the point was to compare, not to assume.
+- [x] Ran it. 1550 rows, 7 combinations, 6 mapped; the 7th is 3 rows with a blank `Plan`
+      cell, deliberately left unmapped because a member with no plan cannot be checked.
+- [x] Real plan strings in `plans.config.json`, `"confirmed": true`. The export says
+      **`Fluoride Varnish`**, not `Fluoride` — that one string was sending every fluoride
+      row to `unknown_csv_plan`. Child plans exist and all go to plan 2.
+- [x] The Perio gap is a **migration, not a data error**: the practice created the Perio
+      plans recently and never moved anyone over. 216 active rows want Perio, OD has 30.
+- [x] Half the export is cancelled — 786 of 1550 — and every one of them whose patient
+      still held the plan was reporting as `correct`. Now `should_drop` / `cancelled`.
+- [x] 132 active subs sit on charts that are not active patients, nine of them deceased.
+      Drops go ahead on any chart; adds and migrations onto a non-`Patient` chart are held
+      back into `changeset-held-back.csv`.
 
-Both splits are always reported. On the sample: matched 13 → 12, not found 6 → 7, one
-inactive chart excluded.
+## Done — the write phase, 8/19
 
-- [ ] Run it against the real export and show him both splits — the comparison he asked
-      for has still never been run on real data.
-- [ ] Then decide the default. The tension worth putting to him: the chart-status column
-      exists so a row that failed because the chart is archived *says so*. Filtering those
-      charts out removes the candidate, so the row goes quiet — right answer, no
-      explanation. Default-off keeps the explanation; default-on keeps the noise down.
-
-## We will never see the real export — what that changed
-
-Settled 8/7: no export data will be shared with us, and OD access here is the local Docker
-seed only. So the mapping cannot be authored from this side, and pretending otherwise would
-ship a tool that hard-errors on every row of the real file.
-
-- [x] Mapping moved out of code into `plans.config.json`, overridable per-run, validated at
-      startup, and marked `"confirmed": false` until someone checks it. Correcting it no
-      longer needs a commit from us.
-- [x] `pnpm discover` — prints the distinct plan strings in an export, the discount plans in
-      OD, and the chart counts by `PatStatus`. Counts only, no patient details, so whoever
-      has the file can run it and paste the output back safely.
-- [x] Local OD seeded with plans and subscriptions (`pnpm seed:local-od-plans`, loopback-only)
-      plus `sample/members.demo-od.sample.csv`, so the whole pipeline runs against real MySQL
-      instead of JSON fixtures — and the write phase has a safe place to be wrong.
-- [ ] **Ask Matthew to run `pnpm discover` against the real export and send back the output.**
-      That is now the entire remaining input needed for the plan mapping, and it contains no PHI.
-
-## Parked — write phase (8/7)
-
-This is a proof of concept and a throwaway, so the write-side questions are not being
-chased. Both are recorded because they are real, not because they are next:
-
-- **Cancelled memberships** — `Active: No` whose patient still holds a plan. No-op writes
-  nothing; drop is one `PUT` setting `DateTerm` on one existing row. Today the report calls
-  these `correct`, which is the one thing that is definitely wrong.
-- **Drop/add ordering** — per patient it is 1 new `discountplansub` row + `DateTerm` on the
-  old one, either order. Term-then-add fails to zero active rows; add-then-term fails to
-  two, and `GET` returns a single object so we cannot tell which. Needs a real test.
-- [x] Term vs delete on drop — agreed: term, to preserve the audit trail.
-- [x] "Null effective date" — answered by the docs: omit the field, it defaults to
+- [x] `DiscountSubNum` on the subs read and on `ActiveSub`. Nothing can be dropped without it.
+- [x] `classifyPlan` takes the CSV `Active` column. Cancelled members are **dropped, never
+      migrated** — the branch never even looks at the plan string.
+- [x] A cancelled row for a patient who *also* has an active row does not drop. The export
+      repeats people; terming a re-enrolled member off the plan they are paying for would be
+      the worst thing this tool could do.
+- [x] `pnpm apply` — dry run by default, `--apply` + `--expect <n>` to write, per-patient
+      JSONL log that doubles as the resume index, `--only` and `--limit` for batching,
+      `--decisions review.csv` so a reviewer's "none of these" is not silently overruled.
+- [x] Every write is bracketed by a SQL re-read: before (is this still true?) and after
+      (is the end state exactly one sub, on the right plan?). The API cannot do this —
+      `GET /discountplansubs?PatNum=` returns one object.
+- [x] Both orderings tested end to end against the local container through
+      `scripts/fake-od-api.ts`, including the refused-overlap branch, which failed as a
+      clean no-op and then succeeded with `--order term-then-add`.
+- [x] Term rather than delete, and `DateEffective` omitted on the `POST` so it defaults to
       `0001-01-01`.
 
-## Read-only discount-plan report
+## Active-charts filter — still his call
 
-Built, with the mapping table carrying the unconfirmed sample strings.
+Built long ago: a toggle in the UI and `--active-charts-only` on the CLI, narrowing
+candidates to `PatStatus = Patient`, **off by default**, both splits always reported.
 
-- [x] `loadActiveDiscountSubs()` — separate `SELECT` on `discountplansub`, into a
-      `Map` keyed by `PatNum`. Never joined into the patient query.
-- [x] Plan mapping table + `classifyPlan()` returning one of seven verdicts.
-- [x] Plan column in the results table: verdict badge, the OD plan, and why.
-- [x] Plan fields on the export record (`Plan Verdict`, `Plan Note`, `CSV Plan Num`,
-      `OD Plan Num`, `OD Plan`, `OD Plan Effective`).
-- [x] An unrecognised CSV plan string is never resolved to a default — the row is
-      `unknown_csv_plan` and the page names the offending strings in a red banner.
-- [x] Unmatched rows are `ineligible`, counted separately from `correct`.
-- [x] Conflicts held back, not resolved: two CSV rows disagreeing about one patient, and
-      patients with more than one active sub, are excluded from the actionable count.
-
-Changed my mind on one line below: plan **tiles** went in after all. They are four
-entries in an array the page already builds, and "how many are already right?" is the
-question the whole exercise exists to answer. No filter tab, as planned.
-
-Still open here:
-
-- [ ] Swap the sample plan strings for the real ones once confirmed — edit
-      `plans.config.json` and flip `"confirmed"` to `true`. No code change, no commit needed.
-- [ ] Run it against the real database and eyeball the Perio bucket.
+- [ ] Decide the default. The tension: the chart-status column exists so a row that failed
+      because the chart is archived *says so*. Filtering those charts out removes the
+      candidate, so the row goes quiet — right answer, no explanation. Note this is a
+      separate question from the write phase's chart guard, which is already decided and
+      does not depend on it.
 
 ## Deliberately not doing (PoC)
 
-- No test suite. Verification is the fixture run plus a look at the real export.
-- No conflict *resolution* pass. Duplicate-group plan disagreements and PatNum collisions
-  are excluded from the actionable count and shown as needs-review — a filter, not a feature.
-- No filter tab for plan buckets; the column, the tiles and the export are enough.
-
-## Before any write to live OD
-
-Not now — nothing above touches it. But the write half runs against the live practice
-database, where a failed drop-then-add leaves real patients on no plan, so this stops
-being polish and starts being the point:
-
-- [ ] Re-read the patient's current sub immediately before writing, not from the report.
-      No idempotency key on create, so a re-run against stale state double-subscribes.
-- [ ] Dry-run mode, and a per-patient log of before / read / written.
-- [ ] Owner sign-off. This would be the first write this project makes to live OD.
+- No test suite. Verification is the fixture run, the local seeded run, and the dry run.
+- No conflict *resolution* pass. Rows that disagree about one patient are excluded from the
+  change set and listed, not resolved.
+- No rollback command. A drop is a `DateTerm` on a row that is still there, and an add is a
+  row with a `DiscountSubNum` in the log, so undoing either is a hand-written `UPDATE` on a
+  named row rather than a feature.

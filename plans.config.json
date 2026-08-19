@@ -1,10 +1,15 @@
 {
-  "confirmed": false,
-  "note": "UNCONFIRMED. These Plan / Add-ons strings come from the sample export, not the real one. Run `pnpm discover <members.csv>` against the real file to list its actual distinct values and the plan numbers in OD, then correct this file. Nothing here is compiled in — editing this file is the whole edit.",
+  "confirmed": true,
+  "note": "Checked against the real export (1550 rows, 8/19). The add-on column says \"Fluoride Varnish\", not \"Fluoride\" — both spellings are mapped so an older export still resolves. Child plans go to 2: OD has no child-specific plan and children are on the w/Fluoride plan. The 3 rows with a blank Plan cell are deliberately unmapped — a member with no plan cannot be checked. Nothing here is compiled in — editing this file is the whole edit.",
   "plans": [
     { "plan": "6 Month- Adult", "addOns": "", "discountPlanNum": 1, "description": "In Office Plan" },
+    { "plan": "6 Month- Adult", "addOns": "Fluoride Varnish", "discountPlanNum": 2, "description": "In Office Plan w/Fluoride" },
     { "plan": "6 Month- Adult", "addOns": "Fluoride", "discountPlanNum": 2, "description": "In Office Plan w/Fluoride" },
     { "plan": "3 Month- Perio", "addOns": "", "discountPlanNum": 3, "description": "In Office Plan Perio" },
-    { "plan": "3 Month- Perio", "addOns": "Fluoride", "discountPlanNum": 5, "description": "In Office Plan Perio W/ Fluoride" }
+    { "plan": "3 Month- Perio", "addOns": "Fluoride Varnish", "discountPlanNum": 5, "description": "In Office Plan Perio W/ Fluoride" },
+    { "plan": "3 Month- Perio", "addOns": "Fluoride", "discountPlanNum": 5, "description": "In Office Plan Perio W/ Fluoride" },
+    { "plan": "6 Month- Child", "addOns": "", "discountPlanNum": 2, "description": "In Office Plan w/Fluoride" },
+    { "plan": "6 Month- Child", "addOns": "Fluoride Varnish", "discountPlanNum": 2, "description": "In Office Plan w/Fluoride" },
+    { "plan": "6 Month- Child", "addOns": "Fluoride", "discountPlanNum": 2, "description": "In Office Plan w/Fluoride" }
   ]
 }

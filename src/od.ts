@@ -168,6 +168,8 @@ const toOdPatient = (record: PatientRecord): OdPatient => {
  * practice unenrolled while looking like a clean run.
  */
 export type ActiveSub = {
+  /** `discountplansub` PK. The write phase cannot term a row without it. */
+  discountSubNum: number
   patNum: number
   discountPlanNum: number
   description: string
@@ -195,13 +197,14 @@ export type ActiveSubs = {
  * `DateTerm = '0001-01-01'` is OD's zero-date sentinel, not NULL — "still active".
  */
 const ACTIVE_SUB_QUERY = `
-  SELECT s.PatNum, s.DiscountPlanNum, s.DateEffective, p.Description
+  SELECT s.DiscountSubNum, s.PatNum, s.DiscountPlanNum, s.DateEffective, p.Description
   FROM discountplansub s
   LEFT JOIN discountplan p ON p.DiscountPlanNum = s.DiscountPlanNum
   WHERE s.DateTerm = '0001-01-01'
 `
 
 type SubRecord = {
+  DiscountSubNum: number
   PatNum: number
   DiscountPlanNum: number
   DateEffective: string | Date | null
@@ -226,6 +229,14 @@ export const loadActiveDiscountSubsFromFixture = async (path: string) => {
   return indexActiveSubs(raw as SubRecord[])
 }
 
+const toActiveSub = (record: SubRecord): ActiveSub => ({
+  discountSubNum: Number(record.DiscountSubNum),
+  patNum: Number(record.PatNum),
+  discountPlanNum: Number(record.DiscountPlanNum),
+  description: (record.Description ?? '').trim(),
+  dateEffective: normalizeDob(record.DateEffective),
+})
+
 const indexActiveSubs = (records: SubRecord[]): ActiveSubs => {
   const byPatNum = new Map<number, ActiveSub>()
   const multipleActive: number[] = []
@@ -236,15 +247,36 @@ const indexActiveSubs = (records: SubRecord[]): ActiveSubs => {
       if (!multipleActive.includes(patNum)) multipleActive.push(patNum)
       continue
     }
-    byPatNum.set(patNum, {
-      patNum,
-      discountPlanNum: Number(record.DiscountPlanNum),
-      description: (record.Description ?? '').trim(),
-      dateEffective: normalizeDob(record.DateEffective),
-    })
+    byPatNum.set(patNum, toActiveSub(record))
   }
 
   return { byPatNum, multipleActive }
+}
+
+/**
+ * The same statement narrowed to one patient — the write phase's read-back.
+ *
+ * Used twice per patient: immediately before a write, because the report is stale by then
+ * and `POST /discountplansubs` has no idempotency key, and immediately after, to confirm
+ * what actually landed. It returns a **list**, not the one sub the report carries: seeing a
+ * second active row is the point, and `GET /discountplansubs?PatNum=` returns a single
+ * object, so the API cannot show one. This is why verification is SQL and not the API.
+ */
+const PATIENT_ACTIVE_SUB_QUERY = `
+  SELECT s.DiscountSubNum, s.PatNum, s.DiscountPlanNum, s.DateEffective, p.Description
+  FROM discountplansub s
+  LEFT JOIN discountplan p ON p.DiscountPlanNum = s.DiscountPlanNum
+  WHERE s.DateTerm = '0001-01-01' AND s.PatNum = ?
+  ORDER BY s.DiscountSubNum
+`
+
+/** One connection held open for a whole run, rather than one per re-read. Still SELECT-only. */
+export const openOdConnection = (connectionUrl: string) =>
+  mysql.createConnection({ uri: connectionUrl, dateStrings: true })
+
+export const readActiveSubsForPatient = async (connection: mysql.Connection, patNum: number) => {
+  const [rows] = await connection.query<mysql.RowDataPacket[]>(PATIENT_ACTIVE_SUB_QUERY, [patNum])
+  return (rows as unknown as SubRecord[]).map(toActiveSub)
 }
 
 /**

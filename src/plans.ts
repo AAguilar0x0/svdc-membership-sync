@@ -110,6 +110,10 @@ export type PlanVerdict =
   | 'wrong_plan'
   /** Matched patient with no active sub at all. Add needed. */
   | 'no_sub'
+  /** Membership cancelled, patient still holds a plan. Term it — never migrate it. */
+  | 'should_drop'
+  /** Membership cancelled and there is nothing on the patient to take off. No action. */
+  | 'cancelled'
   /** On a plan outside the mapping (Employee Benefits, or anything not configured). */
   | 'unmapped_od_plan'
   /** CSV `Plan` / `Add-ons` the mapping does not cover. Never resolved to a default. */
@@ -126,28 +130,62 @@ export type PlanCheck = {
   odPlanNum: number | undefined
   odPlanDescription: string
   odEffectiveDate: string
+  /** `discountplansub` PK of the sub they hold. Nothing can be dropped without it. */
+  odSubNum: number | undefined
   /** Why, when the verdict alone does not say it. */
   note: string
 }
 
-export const classifyPlan = (
-  csvPlan: PlanMapping | undefined,
-  patNum: number | undefined,
-  sub: ActiveSub | undefined,
-  mappedPlans: Set<number>,
-): PlanCheck => {
+export const classifyPlan = ({
+  csvPlan,
+  patNum,
+  sub,
+  mappedPlans,
+  isMembershipActive,
+}: {
+  csvPlan: PlanMapping | undefined
+  patNum: number | undefined
+  sub: ActiveSub | undefined
+  mappedPlans: Set<number>
+  /** The CSV `Active` column. Half the real export is cancelled memberships. */
+  isMembershipActive: boolean
+}): PlanCheck => {
   const base = {
     csvPlanNum: csvPlan?.discountPlanNum,
     csvPlanDescription: csvPlan?.description ?? '',
     odPlanNum: sub?.discountPlanNum,
     odPlanDescription: sub?.description ?? '',
     odEffectiveDate: sub?.dateEffective ?? '',
+    odSubNum: sub?.discountSubNum,
   }
 
   // Order matters. A row with no PatNum is not a patient on the right plan; it is a row we
   // know nothing about, and it has to leave the actionable counts before anything else runs.
   if (patNum === undefined) {
     return { ...base, verdict: 'ineligible', note: 'row was not matched to a patient' }
+  }
+
+  // Cancelled next, and before the CSV plan is even looked at. A cancelled member is not
+  // migrated to the plan their old row names — they are taken off whatever they hold — so
+  // the plan string is not an input to this branch, and an unrecognised one does not block it.
+  if (!isMembershipActive) {
+    if (sub === undefined) {
+      return { ...base, verdict: 'cancelled', note: 'membership cancelled and no active subscription — nothing to drop' }
+    }
+    // An unmapped plan on a cancelled member is not ours to term: plan 7 is Employee
+    // Benefits, which no membership row ever put there and no cancellation should take away.
+    if (!mappedPlans.has(sub.discountPlanNum)) {
+      return {
+        ...base,
+        verdict: 'unmapped_od_plan',
+        note: `membership cancelled, but they are on plan ${sub.discountPlanNum}, which is outside the mapping`,
+      }
+    }
+    return {
+      ...base,
+      verdict: 'should_drop',
+      note: `membership cancelled, still on plan ${sub.discountPlanNum} — term it`,
+    }
   }
 
   if (csvPlan === undefined) {
@@ -175,11 +213,32 @@ export const PLAN_VERDICT_LABELS: Record<PlanVerdict, string> = {
   correct: 'Correct',
   wrong_plan: 'Wrong plan',
   no_sub: 'No sub',
+  should_drop: 'Should drop',
+  cancelled: 'Cancelled',
   unmapped_od_plan: 'Unmapped plan',
   unknown_csv_plan: 'Unknown CSV plan',
   conflict: 'Conflict',
   ineligible: 'Not matched',
 }
 
-/** Only these two are a clean instruction to the write phase. Everything else needs a human. */
-export const isActionablePlanVerdict = (verdict: PlanVerdict) => verdict === 'wrong_plan' || verdict === 'no_sub'
+/** Only these three are a clean instruction to the write phase. Everything else needs a human. */
+export const isActionablePlanVerdict = (verdict: PlanVerdict) =>
+  verdict === 'wrong_plan' || verdict === 'no_sub' || verdict === 'should_drop'
+
+/**
+ * The write the verdict asks for, named once here so the planner, the dry run and the log
+ * all say the same word.
+ *
+ * `drop` is one `PUT` and carries no ordering risk, which is why it is run as its own batch
+ * first. `migrate` is the term-then-add pair: `PUT /discountplansubs/{n}` cannot change
+ * `DiscountPlanNum` — it only takes `DateEffective`, `DateTerm` and `SubNote` — so a plan
+ * change is two calls, not one.
+ */
+export const planActionFor = (verdict: PlanVerdict) => {
+  if (verdict === 'should_drop') return 'drop' as const
+  if (verdict === 'no_sub') return 'add' as const
+  if (verdict === 'wrong_plan') return 'migrate' as const
+  return 'none' as const
+}
+
+export type PlanAction = ReturnType<typeof planActionFor>

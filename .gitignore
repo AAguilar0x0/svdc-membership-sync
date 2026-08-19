@@ -1,7 +1,10 @@
 node_modules/
 .env
 out/
-# never commit a real member export — it is PHI
+# never commit a real member export — it is PHI. The README's own examples put it at the
+# repo root (`pnpm apply ./members.csv`), so root-level CSVs are ignored; sample/*.csv,
+# which are fabricated and meant to be tracked, are not.
+/*.csv
 *.xlsx
 data/
 .DS_Store

@@ -9,6 +9,7 @@
     "dev": "tsx watch src/server.ts",
     "match": "tsx src/index.ts",
     "discover": "tsx src/discover.ts",
+    "apply": "tsx src/apply.ts",
     "seed:local-od-plans": "tsx scripts/seed-local-od-plans.ts",
     "typecheck": "tsc --noEmit"
   },

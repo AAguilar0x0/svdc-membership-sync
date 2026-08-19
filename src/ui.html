@@ -44,7 +44,9 @@
     font: inherit; font-size: .85rem; padding: .4rem .75rem; border-radius: 7px;
     border: 1px solid var(--border); background: var(--panel); color: var(--text); cursor: pointer;
   }
-  button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+  /* Not `.active`: a filled tab already uses the accent as its background, and tinting the
+     label to match on hover renders it accent-on-accent — invisible under the cursor. */
+  button:hover:not(:disabled):not(.active) { border-color: var(--accent); color: var(--accent); }
   button:disabled { opacity: .45; cursor: not-allowed; }
   button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
   button.primary:hover { opacity: .9; color: #fff; }

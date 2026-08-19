@@ -60,8 +60,20 @@ const subById = async (discountSubNum: number) => {
   return rows.at(0)
 }
 
+/**
+ * Same rule as the review server. Binding to loopback keeps the network out but not DNS
+ * rebinding: a page open in the operator's browser can point its own hostname at 127.0.0.1
+ * and POST to this, and this one writes.
+ */
+const isLoopbackHost = (host: string | undefined) =>
+  LOOPBACK_HOSTS.has((host ?? '').replace(/:\d+$/, '').toLowerCase())
+
 const server = createServer((req, res) => {
   void (async () => {
+    if (!isLoopbackHost(req.headers.host)) {
+      return json(res, 403, { error: 'Blocked: this server only answers requests addressed to localhost.' })
+    }
+
     const requestUrl = new URL(req.url ?? '/', `http://localhost:${PORT}`)
     const path = requestUrl.pathname.replace(/\/$/, '')
 

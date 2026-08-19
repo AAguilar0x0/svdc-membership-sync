@@ -1,4 +1,6 @@
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { parseArgs } from 'node:util'
 import { parse } from 'csv-parse/sync'
@@ -189,6 +191,70 @@ const isCalendarDate = (value: string) => {
   return !Number.isNaN(parsed.getTime()) && parsed.toISOString().startsWith(value)
 }
 
+/**
+ * One writer per database, enforced with an advisory lock.
+ *
+ * Two runs at once double-subscribe every patient in the batch. Both of them notice — the
+ * read-back after each write reports "2 active subs, expected exactly plan N" — but by then
+ * it has happened, and every affected patient needs unpicking by hand. It is not a
+ * far-fetched way to get there either: the batch is long, the tool tells you to re-run it
+ * after a failure, and a second terminal or a forgotten background run is all it takes.
+ * The per-patient log does not help, because a second run pointed at its own `--log` shares
+ * nothing with the first.
+ *
+ * So the lock is keyed on the thing actually being written — the database URL — rather than
+ * on the log or the output directory, both of which a second run can trivially not share.
+ */
+const acquireWriteLock = (odDbUrl: string) => {
+  const key = createHash('sha256').update(odDbUrl).digest('hex').slice(0, 16)
+  const lockPath = join(tmpdir(), `svdc-membership-sync-${key}.lock`)
+
+  const claim = () => {
+    const handle = openSync(lockPath, 'wx')
+    writeFileSync(handle, JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() }))
+    return handle
+  }
+
+  try {
+    claim()
+  } catch (error: unknown) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+
+    // Held — unless the holder is gone. A run killed mid-batch leaves its lock behind, and
+    // refusing forever on a dead process would mean editing /tmp to recover from a Ctrl-C.
+    const holder = readLockHolder(lockPath)
+    if (holder !== undefined && isRunning(holder.pid)) {
+      throw new Error(
+        `Another apply run (pid ${holder.pid}, started ${holder.startedAt}) is already writing to this database. ` +
+          'Two at once double-subscribe every patient in the batch. Wait for it, or stop it and re-run — ' +
+          'completed patients are skipped automatically.',
+      )
+    }
+    rmSync(lockPath, { force: true })
+    claim()
+  }
+
+  return () => rmSync(lockPath, { force: true })
+}
+
+const readLockHolder = (lockPath: string) => {
+  try {
+    return JSON.parse(readFileSync(lockPath, 'utf8')) as { pid: number; startedAt: string }
+  } catch {
+    return undefined
+  }
+}
+
+/** Signal 0 tests for existence without delivering anything. */
+const isRunning = (pid: number) => {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error: unknown) {
+    return (error as NodeJS.ErrnoException).code === 'EPERM'
+  }
+}
+
 const today = () => {
   const now = new Date()
   const pad = (value: number) => String(value).padStart(2, '0')
@@ -262,11 +328,25 @@ const readLog = (path: string) => {
   const done = new Map<number, string>()
   if (!existsSync(path)) return done
 
+  let unreadable = 0
   for (const line of readFileSync(path, 'utf8').split('\n')) {
     if (line.trim() === '') continue
-    const record = JSON.parse(line) as LogRecord
-    if (record.outcome !== 'written') continue
-    done.set(record.patNum, record.action)
+
+    // A record half-written when the process died leaves a truncated last line. Failing
+    // the parse would brick the resume the log exists for — mid-batch, against the live
+    // database, with a JSON position offset for a diagnostic. An unreadable record means
+    // that patient's outcome is unknown, and unknown belongs outstanding: the re-read
+    // before the write establishes the truth either way.
+    try {
+      const record = JSON.parse(line) as LogRecord
+      if (record.outcome === 'written') done.set(record.patNum, record.action)
+    } catch {
+      unreadable += 1
+    }
+  }
+
+  if (unreadable > 0) {
+    console.log(`\n  ⚠ ${unreadable} unreadable line(s) in ${path} — those patients are treated as outstanding.`)
   }
   return done
 }
@@ -279,6 +359,7 @@ const execute = async (
 ) => {
   const config = loadOdApiConfig()
   const api = new OdApi(config)
+  const releaseLock = acquireWriteLock(options.odDbUrl)
   const connection = await openOdConnection(options.odDbUrl)
   const host = new URL(config.baseUrl).hostname
   const isLoopback = ['localhost', '127.0.0.1', '::1'].includes(host)
@@ -317,6 +398,7 @@ const execute = async (
     }
   } finally {
     await connection.end()
+    releaseLock()
     console.log(`
   written ${counts.written} · skipped ${counts.skipped} · failed ${counts.failed}
   Every patient above was re-read in SQL before and after its write. Re-run the same
